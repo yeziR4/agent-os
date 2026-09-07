@@ -120,8 +120,14 @@ def test_trusted_proxy_honors_x_forwarded_for() -> None:
     assert "10.0.0.1" not in _tracked_ips(mw)
 
 
-def test_trusted_proxy_x_forwarded_for_multiple_ips() -> None:
-    """X-Forwarded-For with multiple IPs takes the first (client) IP."""
+def test_trusted_proxy_x_forwarded_for_only_honors_entry_adjacent_to_trust() -> None:
+    """With one trusted hop, only the entry it appended is honored.
+
+    ``10.0.0.5`` here is NOT a configured trusted proxy, so it — not
+    ``203.0.113.99`` — is the closest thing to a proxy-observed value. The
+    leftmost entry is always whatever the client chose to send and must
+    never be trusted just because it's followed by a real proxy's hop.
+    """
     app, mw_holder = _create_app(
         max_requests=1,
         window_seconds=60,
@@ -136,8 +142,66 @@ def test_trusted_proxy_x_forwarded_for_multiple_ips() -> None:
         assert resp.status_code == 200
 
     mw = mw_holder[0]
-    assert "203.0.113.99" in _tracked_ips(mw)
+    assert "10.0.0.5" in _tracked_ips(mw)
+    assert "203.0.113.99" not in _tracked_ips(mw)
     assert len(mw._windows) == 1
+
+
+def test_trusted_proxy_chain_of_trusted_hops_resolves_real_client() -> None:
+    """When every intermediate hop is itself a configured trusted proxy,
+    walking past all of them correctly reaches the real client IP."""
+    app, mw_holder = _create_app(
+        max_requests=1,
+        window_seconds=60,
+        trusted_proxy="10.0.0.1, 10.0.0.5",
+    )
+
+    with TestClient(app, client=("10.0.0.1", 50000)) as client:
+        resp = client.get(
+            "/api/test",
+            headers={"x-forwarded-for": "203.0.113.99, 10.0.0.5, 10.0.0.1"},
+        )
+        assert resp.status_code == 200
+
+    mw = mw_holder[0]
+    assert "203.0.113.99" in _tracked_ips(mw)
+
+
+def test_untrusted_peer_cannot_bypass_rate_limit_by_prepending_fake_ips() -> None:
+    """Regression test: a client connecting through the one trusted proxy
+    cannot defeat rate limiting by sending a different fabricated leading
+    X-Forwarded-For value on every request — only the entry the trusted
+    proxy itself appended (its observed peer) is ever honored."""
+    app, mw_holder = _create_app(
+        max_requests=2,
+        window_seconds=60,
+        trusted_proxy="10.0.0.1",
+    )
+
+    with TestClient(app, client=("10.0.0.1", 50000)) as client:
+        # Same real client (as the trusted proxy would append it), a fresh
+        # attacker-chosen leading value on every request.
+        assert (
+            client.get(
+                "/api/test", headers={"x-forwarded-for": "1.1.1.1, 198.51.100.7"}
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(
+                "/api/test", headers={"x-forwarded-for": "2.2.2.2, 198.51.100.7"}
+            ).status_code
+            == 200
+        )
+        # Third request from the same real client must now be rate limited,
+        # not treated as yet another fresh "client".
+        resp = client.get(
+            "/api/test", headers={"x-forwarded-for": "3.3.3.3, 198.51.100.7"}
+        )
+        assert resp.status_code == 429
+
+    mw = mw_holder[0]
+    assert _tracked_ips(mw) == ["198.51.100.7"]
 
 
 def test_trusted_proxy_missing_or_blank_forwarded_for_falls_back_to_peer() -> None:

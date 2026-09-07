@@ -14,7 +14,12 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.types import ASGIApp
 
-from agentos.gateway.access import is_loopback_address, peer_is_trusted_proxy
+from agentos.gateway.access import (
+    is_loopback_address,
+    normalize_peer_ip,
+    parse_trusted_proxy_set,
+    peer_is_trusted_proxy,
+)
 from agentos.gateway.auth import token_matches
 from agentos.gateway.config import GatewayConfig
 
@@ -345,12 +350,32 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if self._is_trusted_proxy(peer_ip):
             forwarded = request.headers.get("x-forwarded-for")
             if forwarded:
-                first_ip = forwarded.split(",")[0].strip()
-                if first_ip:
-                    return first_ip
+                extracted = self._closest_untrusted_ip(forwarded)
+                if extracted:
+                    return extracted
         if peer_ip:
             return peer_ip
         return "unknown"
+
+    def _closest_untrusted_ip(self, forwarded: str) -> str | None:
+        """Return the rightmost X-Forwarded-For entry not itself a trusted proxy.
+
+        The *leftmost* entry is whatever the client chose to send — it is
+        never proxy-verified, so an attacker connecting through the one
+        trusted hop can put an arbitrary, freely-rotating value there and
+        defeat per-IP rate limiting entirely (each request looks like a new
+        "client"). Only entries a trusted proxy itself appended are
+        trustworthy, and the trusted set has no notion of chain order, so we
+        walk from the right and take the first entry that isn't a configured
+        trusted proxy — the same convention Django's ``ipware`` and Rails'
+        ``RemoteIp`` use for exactly this reason.
+        """
+        trusted = parse_trusted_proxy_set(self._config.auth.trusted_proxy)
+        for raw in reversed(forwarded.split(",")):
+            candidate = raw.strip()
+            if candidate and normalize_peer_ip(candidate) not in trusted:
+                return candidate
+        return None
 
     def _sweep_expired(self, now: float, window: float) -> None:
         self._last_sweep = now
