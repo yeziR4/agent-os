@@ -10,6 +10,14 @@ REDACTED_PLACEHOLDER = "***"
 
 _PROVIDER_SECRET_FIELDS = frozenset({"api_key"})
 
+# Metadata fields common to every channel entry model (see
+# ``channels.registry._COMMON_ENTRY_FIELDS``), never secret. Used as the
+# fail-closed allowlist below for channel types the onboarding catalog
+# doesn't know about (e.g. "msteams", which is hidden from the catalog per
+# channel_specs.py but is still a real, constructible channel entry with a
+# secret ``app_password`` field).
+_ALWAYS_SAFE_ENTRY_FIELDS = frozenset({"name", "type", "enabled", "agent_id"})
+
 
 def redact_provider_payload(payload: dict[str, Any]) -> dict[str, Any]:
     out = dict(payload)
@@ -63,7 +71,17 @@ def redact_channel_entry(type_name: str, payload: dict[str, Any]) -> dict[str, A
     try:
         spec = get_channel_setup_spec(type_name)
     except KeyError:
-        return dict(payload)
+        # Unknown to the onboarding catalog — fail closed rather than echo
+        # the raw entry. A channel type can be a real, constructible entry
+        # (e.g. a hidden-but-supported adapter, or a legacy type retained in
+        # an existing config) without appearing in the catalog this function
+        # otherwise relies on for its list of secret field names, so we
+        # can't assume "not in the catalog" means "has no secrets."
+        return {
+            key: value
+            for key, value in payload.items()
+            if key in _ALWAYS_SAFE_ENTRY_FIELDS
+        }
     secret_names = {f.name for f in spec.fields if f.secret}
     out = dict(payload)
     for key in secret_names:
