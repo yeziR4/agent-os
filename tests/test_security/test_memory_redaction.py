@@ -90,6 +90,17 @@ from agentos.memory.redaction import redact_memory_text
             "After",
             "Before\n«redacted:private-key»\nAfter",
         ),
+        # Short (< 12 char) secrets in JSON-quoted-key form: too short for
+        # the general pipeline's _MIN_SECRET_VALUE_LEN gate, and the old
+        # _KEYWORD_PATTERN required a bare (unquoted) keyword immediately
+        # before the separator, so these previously matched neither layer
+        # and were persisted unredacted.
+        ('{"password": "abc123"}', '{"password": [REDACTED]}'),
+        ('{"api_key": "short1"}', '{"api_key": [REDACTED]}'),
+        ('{"secret":"xy9"}', '{"secret":[REDACTED]}'),
+        ('{"token": "tok_short"}', '{"token": [REDACTED]}'),
+        # Non-credential field names must still be left alone in JSON form.
+        ('{"sellToken": "abc123"}', '{"sellToken": "abc123"}'),
     ],
 )
 def test_redact_memory_text(input_text: str, expected_text: str) -> None:
