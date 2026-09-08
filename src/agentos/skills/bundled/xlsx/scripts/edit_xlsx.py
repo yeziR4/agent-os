@@ -41,11 +41,25 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             sheet_name = op.get("sheet")
             row = op.get("row")
             col = op.get("col")
-            value = op.get("value")
             if sheet_name not in wb.sheetnames or row is None or col is None:
                 continue
+            if "value" not in op:
+                # No value supplied at all — nothing to apply, and not the
+                # same request as an explicit null (see below).
+                continue
+            value = op["value"]
             ws = wb[sheet_name]
-            ws.cell(row=int(row), column=int(col), value=_coerce(value, bool(op.get("as_text"))))
+            cell = ws.cell(row=int(row), column=int(col))
+            if value is None:
+                # Explicit JSON null means "clear this cell". openpyxl's
+                # Worksheet.cell(..., value=None) does NOT assign — None
+                # there means "just fetch the cell, don't modify it" — so
+                # a null value silently left the previous content in place
+                # while still reporting success. Assign directly on the
+                # fetched Cell instead, which preserves its styles/format.
+                cell.value = None
+            else:
+                cell.value = _coerce(value, bool(op.get("as_text")))
             applied += 1
         elif kind == "rename_sheet":
             old = op.get("old")
