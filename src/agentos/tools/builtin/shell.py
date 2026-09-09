@@ -779,7 +779,12 @@ async def exec_command(
         decision, policy, request = await gate_action(
             action_kind="shell.exec",
             argv=("exec_command", command),
-            cwd=Path(workdir) if workdir else None,
+            # Pass the already-resolved `cwd`, not the raw `workdir` — a
+            # relative workdir (e.g. "subproject") is not absolute, so
+            # `_resolve_workspace` would silently drop it and gate (and
+            # then actually execute) the command against the workspace
+            # root instead of the directory the caller asked for.
+            cwd=Path(cwd) if cwd else None,
             env=merged_env,
         )
         if isinstance(decision, DenialResult):
@@ -937,7 +942,10 @@ async def background_process(
         decision, policy, request = await gate_action(
             action_kind="shell.background",
             argv=("background_process", command),
-            cwd=Path(workdir) if workdir else None,
+            # See the matching comment in exec_command: `cwd`, not the raw
+            # `workdir`, so a relative workdir isn't dropped in favour of
+            # the workspace root.
+            cwd=Path(cwd) if cwd else None,
             env=dict(os.environ),
         )
         if isinstance(decision, DenialResult):
