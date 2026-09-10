@@ -179,7 +179,10 @@ async def _handle_logs_trace(params: dict | None, ctx: RpcContext) -> dict[str, 
 async def _handle_logs_tail(params: dict | None, ctx: RpcContext) -> dict[str, Any]:
     """Tail log file with cursor-based pagination and level filter."""
     p = params or {}
-    limit = min(p.get("limit", 100), 1000)
+    try:
+        limit = max(1, min(int(p.get("limit", 100)), 1000))
+    except (TypeError, ValueError):
+        limit = 100
     level_filter = (p.get("level", "") or "").upper()
     cursor = p.get("cursor", 0)
 

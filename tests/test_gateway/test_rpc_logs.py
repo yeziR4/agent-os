@@ -26,6 +26,41 @@ async def test_logs_tail_uses_agentos_log_dir_and_filters_level(tmp_path, monkey
 
 
 @pytest.mark.asyncio
+async def test_logs_tail_zero_limit_does_not_return_the_entire_file(tmp_path, monkeypatch) -> None:
+    """Regression: Python's ``list[-0:] == list[0:]`` (the whole list) means an
+    unclamped ``limit=0`` silently returned every line instead of none."""
+    monkeypatch.setenv("AGENTOS_LOG_DIR", str(tmp_path))
+    tmp_path.joinpath("debug.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+    result = await _handle_logs_tail({"limit": 0, "cursor": 0}, None)  # type: ignore[arg-type]
+
+    assert result["lines"] == ["line3"]
+    assert result["has_more"] is True
+
+
+@pytest.mark.asyncio
+async def test_logs_tail_negative_limit_is_clamped_to_one(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("AGENTOS_LOG_DIR", str(tmp_path))
+    tmp_path.joinpath("debug.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+    result = await _handle_logs_tail({"limit": -5, "cursor": 0}, None)  # type: ignore[arg-type]
+
+    assert result["lines"] == ["line3"]
+
+
+@pytest.mark.asyncio
+async def test_logs_tail_non_numeric_limit_falls_back_to_the_default(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("AGENTOS_LOG_DIR", str(tmp_path))
+    tmp_path.joinpath("debug.log").write_text("line1\nline2\nline3\n", encoding="utf-8")
+
+    result = await _handle_logs_tail({"limit": "not-a-number", "cursor": 0}, None)  # type: ignore[arg-type]
+
+    assert result["lines"] == ["line1", "line2", "line3"]
+
+
+@pytest.mark.asyncio
 async def test_logs_tail_missing_file_returns_empty_payload(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENTOS_LOG_DIR", str(tmp_path))
 
