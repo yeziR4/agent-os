@@ -91,6 +91,14 @@ def _parse_patch(patch_text: str) -> list[PatchOp]:
                 raw = body[i]
                 if raw.startswith("+"):
                     content_lines.append(raw[1:])
+                elif not raw:
+                    # A blank line with no leading "+" is still a line of the
+                    # new file's content, not a separator to discard -- the
+                    # same convention ``_split_hunk_line`` applies to hunk
+                    # lines in ``*** Update File`` blocks. Editors, terminals
+                    # and model output routinely strip trailing whitespace,
+                    # turning an intended blank content line into a bare "".
+                    content_lines.append("")
                 i += 1
             ops.append(AddFile(path=path, content="\n".join(content_lines)))
 

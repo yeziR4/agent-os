@@ -167,3 +167,22 @@ def test_add_file_emits_lf_on_every_platform(tmp_path: Path) -> None:
     # lines are joined, not terminated) — not something the newline handling
     # chose. The assertion is about the separator being LF, not the tail.
     assert (tmp_path / "created.txt").read_bytes() == b"alpha\nbeta"
+
+
+def test_add_file_keeps_bare_blank_content_lines(tmp_path: Path) -> None:
+    """A blank line with no leading "+" inside ``*** Add File`` is content.
+
+    ``*** Update File`` hunks already treat a bare "" as blank context (see
+    ``_split_hunk_line``) because editors, terminals and model output
+    routinely strip the trailing space that would otherwise mark an empty
+    context/content line. ``*** Add File`` blocks must follow the same
+    convention instead of silently dropping the line.
+    """
+    patch_text = """*** Begin Patch
+*** Add File: created.txt
++def foo():
+
++    pass
+*** End Patch"""
+    assert _apply(patch_text, tmp_path) == (1, 0, 0)
+    assert (tmp_path / "created.txt").read_bytes() == b"def foo():\n\n    pass"
