@@ -1375,7 +1375,12 @@ class DiscordChannel:
         Returns the message ID or None if iterator was empty.
 
         Uses ``StreamThrottle`` so two PATCH calls cannot race and a
-        single transient failure does not lose accumulated text.
+        single transient failure does not lose accumulated text. Once the
+        text open on the current message would cross Discord's 2000-char
+        cap, the overflow rolls into a new message instead of PATCHing an
+        over-limit payload -- the same chunking ``send()`` already does via
+        ``_split_content_for_send``, and the same pattern Telegram's
+        ``send_streaming``/``_post_segments`` already implements.
         """
         target = channel_id or self.config.default_channel_id
         client = self._get_client()
@@ -1388,15 +1393,18 @@ class DiscordChannel:
                 raise ValueError("missing Discord application id for interaction response")
             interaction_path = f"/webhooks/{application_id}/{interaction_token}/messages/@original"
 
-        async def _post(text: str) -> None:
+        # The interaction's @original slot holds exactly one message; once
+        # overflow opens a second message, every later post/edit targets
+        # that regular channel message like a non-interaction stream would.
+        open_path = interaction_path
+        segment_start = 0
+        delivered = 0
+
+        async def _post_one(text: str) -> None:
             nonlocal message_id
             await self._rate_limiter.acquire()
-            if interaction_path is not None:
-                resp = await retry_request(
-                    client.patch,
-                    interaction_path,
-                    json={"content": text},
-                )
+            if open_path is not None:
+                resp = await retry_request(client.patch, open_path, json={"content": text})
             else:
                 resp = await retry_request(
                     client.post,
@@ -1407,14 +1415,10 @@ class DiscordChannel:
             resp.raise_for_status()
             message_id = resp.json().get("id")
 
-        async def _edit(text: str) -> None:
+        async def _edit_one(text: str) -> None:
             await self._rate_limiter.acquire()
-            if interaction_path is not None:
-                await retry_request(
-                    client.patch,
-                    interaction_path,
-                    json={"content": text},
-                )
+            if open_path is not None:
+                await retry_request(client.patch, open_path, json={"content": text})
             else:
                 await retry_request(
                     client.patch,
@@ -1423,11 +1427,49 @@ class DiscordChannel:
                     headers=self._auth_headers(),
                 )
 
+        async def _post_segments(remaining: str) -> None:
+            """Post *remaining* as one or more new messages, splitting at the cap.
+
+            ``segment_start`` only advances when a message fills up and a new
+            one opens -- it marks where the *currently open* message begins
+            within the full accumulated text, since an edit must resend that
+            whole message, not just the newest chunk. ``delivered`` tracks
+            the total transmitted so far, so a final flush that would only
+            repeat what's already on the wire can be skipped.
+            """
+            nonlocal open_path, segment_start, delivered
+            while True:
+                head, tail = split_text_for_limit(remaining, _DISCORD_MESSAGE_TEXT_LIMIT)
+                await _post_one(head)
+                delivered = segment_start + len(head)
+                if not tail:
+                    return
+                open_path = None
+                segment_start = delivered
+                remaining = tail
+
+        async def _post(text: str) -> None:
+            await _post_segments(text[segment_start:])
+
+        async def _edit(text: str) -> None:
+            nonlocal segment_start, delivered
+            head, tail = split_text_for_limit(text[segment_start:], _DISCORD_MESSAGE_TEXT_LIMIT)
+            await _edit_one(head)
+            delivered = segment_start + len(head)
+            if tail:
+                # This message is full: freeze it and roll over into a new one.
+                segment_start = delivered
+                await _post_segments(tail)
+
         async for chunk in chunks:
             throttle.add(chunk)
             await throttle.maybe_flush(post=_post, edit=_edit)
 
-        await throttle.force_flush(post=_post, edit=_edit)
+        # ``delivered`` already covers the full text when the loop's last
+        # flush sent everything -- a force_flush here would just PATCH the
+        # same content again.
+        if delivered < len(throttle.text):
+            await throttle.force_flush(post=_post, edit=_edit)
         return message_id
 
     # ------------------------------------------------------------------
