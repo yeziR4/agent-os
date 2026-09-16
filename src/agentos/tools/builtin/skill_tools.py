@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
+import yaml
 
 from agentos.result_budget import register_persisted_result_budget
 from agentos.skills.hub.defaults import (
@@ -51,7 +52,7 @@ _INSTALL_TIMEOUT_SECONDS = 120.0
 
 
 def _sanitize_yaml_value(value: str) -> str:
-    """Strip characters that could inject YAML structure."""
+    """Collapse a value to one line so it can't smuggle extra frontmatter keys."""
     return value.replace("\n", " ").replace("\r", " ").strip()
 
 
@@ -61,17 +62,29 @@ def _render_skill_md(
     content: str,
     triggers: list[str] | None = None,
 ) -> str:
-    """Render a SKILL.md file from parts."""
-    safe_desc = _sanitize_yaml_value(description)
-    lines = ["---", f"name: {name}", f"description: {safe_desc}"]
+    """Render a SKILL.md file from parts.
+
+    The frontmatter is built as a dict and serialized with ``yaml.safe_dump``
+    rather than hand-formatted strings, so a description or trigger containing
+    YAML-significant characters (``: ``, a leading ``- `` or ``#``, quotes,
+    ``[``/``{``, …) is quoted correctly instead of corrupting the document.
+    Before that fix, a plain-scalar description such as "Convert times: UTC
+    to PST" produced frontmatter that ``yaml.safe_load`` cannot parse; the
+    loader (``agentos.skills.loader._parse_frontmatter``) treats any
+    unparseable frontmatter as absent and skips the skill entirely, so
+    ``skill_create``/``skill_edit`` reported success while writing a skill
+    that silently never loads.
+    """
+    frontmatter: dict[str, Any] = {
+        "name": name,
+        "description": _sanitize_yaml_value(description),
+    }
     if triggers:
-        lines.append("triggers:")
-        for t in triggers:
-            lines.append(f"  - {_sanitize_yaml_value(t)}")
-    lines.append("---")
-    lines.append("")
-    lines.append(content)
-    return "\n".join(lines)
+        frontmatter["triggers"] = [_sanitize_yaml_value(t) for t in triggers]
+    fm_text = yaml.safe_dump(
+        frontmatter, default_flow_style=False, sort_keys=False, allow_unicode=True
+    ).rstrip("\n")
+    return f"---\n{fm_text}\n---\n\n{content}"
 
 
 def _cap_output(value: bytes | str, limit: int = _INSTALL_OUTPUT_LIMIT) -> str:
