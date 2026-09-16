@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from agentos.compat.inspect_utils import accepts_keyword_arg
 from agentos.gateway.session_lifecycle import session_status_for_task_status
 from agentos.gateway.task_runtime import SubagentCompletionEvent
 from agentos.session.terminal_reply import is_context_payload_too_large, sanitize_agent_error
@@ -300,7 +301,14 @@ async def _read_child_result(
     if not callable(read_transcript):
         return _result_payload("")
     try:
-        rows = await read_transcript(child_session_key, limit=50)
+        # A subagent's transcript can easily grow past 50 entries before it
+        # finishes; without newest_first the oldest 50 rows are read instead
+        # of the recent ones, and the scan below never reaches the real
+        # final answer. Duck-typed here since test doubles predate the flag.
+        if accepts_keyword_arg(read_transcript, "newest_first"):
+            rows = await read_transcript(child_session_key, limit=50, newest_first=True)
+        else:
+            rows = await read_transcript(child_session_key, limit=50)
     except Exception:
         return _result_payload("")
     for row in reversed(list(rows or [])):

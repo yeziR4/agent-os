@@ -370,6 +370,45 @@ async def test_get_transcript_orders_same_timestamp_by_insert_id(manager):
     assert [entry.id for entry in entries] == sorted(entry.id for entry in entries)
 
 
+@pytest.mark.asyncio
+async def test_get_transcript_limit_defaults_to_oldest_first(manager):
+    await manager.create("agent:main:main")
+    for i in range(30):
+        await manager.append_message("agent:main:main", "user", f"msg-{i:03d}")
+
+    entries = await manager.get_transcript("agent:main:main", limit=10)
+
+    assert [e.content for e in entries] == [f"msg-{i:03d}" for i in range(10)]
+
+
+@pytest.mark.asyncio
+async def test_get_transcript_newest_first_windows_from_the_newest_end(manager):
+    await manager.create("agent:main:main")
+    for i in range(30):
+        await manager.append_message("agent:main:main", "user", f"msg-{i:03d}")
+
+    entries = await manager.get_transcript("agent:main:main", limit=10, newest_first=True)
+
+    # Still returned oldest-first within the window, but the window itself
+    # is the newest 10 entries rather than the oldest 10.
+    assert [e.content for e in entries] == [f"msg-{i:03d}" for i in range(20, 30)]
+
+
+@pytest.mark.asyncio
+async def test_read_transcript_newest_first_reaches_the_latest_message(manager):
+    await manager.create("agent:main:main")
+    for i in range(80):
+        role = "user" if i % 2 == 0 else "assistant"
+        await manager.append_message("agent:main:main", role, f"msg-{i:03d}")
+    await manager.append_message("agent:main:main", "assistant", "the real final answer")
+
+    stale = await manager.read_transcript("agent:main:main", limit=20)
+    fresh = await manager.read_transcript("agent:main:main", limit=20, newest_first=True)
+
+    assert stale[-1]["content"] == "msg-019"
+    assert fresh[-1]["content"] == "the real final answer"
+
+
 def test_get_transcript_query_uses_id_tiebreaker() -> None:
     source = Path("src/agentos/session/storage.py").read_text(encoding="utf-8")
 

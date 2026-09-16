@@ -1252,16 +1252,39 @@ class SessionStorage:
             await self.conn.commit()
 
     async def get_transcript(
-        self, session_id: str, limit: int | None = None, offset: int = 0
+        self,
+        session_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+        *,
+        newest_first: bool = False,
     ) -> list[TranscriptEntry]:
-        # SQLite requires LIMIT before OFFSET; use -1 for unlimited
-        limit_val = limit if limit is not None else -1
-        sql = (
-            "SELECT * FROM transcript_entries WHERE session_id = ? "
-            "ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?"
-        )
-        async with self.conn.execute(sql, (session_id, limit_val, offset)) as cur:
-            rows = await cur.fetchall()
+        """Return transcript entries for a session, oldest first.
+
+        ``newest_first`` windows ``limit``/``offset`` from the newest end
+        instead of the oldest -- what a caller reading recent history needs
+        once a session's transcript has grown past ``limit`` (the default
+        window otherwise silently drops the newest rows, never reaching
+        them). Rows are still returned oldest-first. Ignored when ``limit``
+        is ``None``, since the full transcript is the same set either way.
+        """
+        if newest_first and limit is not None:
+            sql = (
+                "SELECT * FROM (SELECT * FROM transcript_entries WHERE session_id = ? "
+                "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?) "
+                "ORDER BY created_at ASC, id ASC"
+            )
+            async with self.conn.execute(sql, (session_id, limit, offset)) as cur:
+                rows = await cur.fetchall()
+        else:
+            # SQLite requires LIMIT before OFFSET; use -1 for unlimited
+            limit_val = limit if limit is not None else -1
+            sql = (
+                "SELECT * FROM transcript_entries WHERE session_id = ? "
+                "ORDER BY created_at ASC, id ASC LIMIT ? OFFSET ?"
+            )
+            async with self.conn.execute(sql, (session_id, limit_val, offset)) as cur:
+                rows = await cur.fetchall()
         return [TranscriptEntry(**_deserialize_row(dict(r))) for r in rows]
 
     async def get_canonical_transcript(
