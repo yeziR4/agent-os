@@ -7,6 +7,8 @@ skill directories contain hyphens and run as standalone subprocess scripts.
 from __future__ import annotations
 
 import importlib.util
+import os
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -234,3 +236,55 @@ def test_non_openrouter_video_provider_uses_only_its_provider_env(
         )
         == "ark-key"
     )
+
+
+def _run_generate_image(tmp_path: Path, *extra_args: str) -> subprocess.CompletedProcess[str]:
+    """Invoke the real CLI with no API key configured, as the bug report did.
+
+    With no key available, ``main()`` parses arguments and then exits cleanly
+    at the "no OpenRouter API key" check (return 1) well before any network
+    call — a stable seam for proving argument parsing itself succeeded.
+    """
+    env = {k: v for k, v in os.environ.items() if "KEY" not in k.upper()}
+    env["HOME"] = str(tmp_path)
+    return subprocess.run(
+        [
+            sys.executable,
+            str(IMAGE_SCRIPT),
+            "--prompt",
+            "x",
+            "--filename",
+            str(tmp_path / "out.png"),
+            *extra_args,
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+    )
+
+
+def test_placeholder_on_fail_accepts_bare_flag_as_documented(tmp_path: Path) -> None:
+    """The module docstring documents ``--placeholder-on-fail`` as a bare flag.
+
+    Pre-fix, argparse required a value and exited 2 with "expected one
+    argument" before reaching the API-key check at all.
+    """
+    result = _run_generate_image(tmp_path, "--placeholder-on-fail")
+    assert "expected one argument" not in result.stderr
+    assert result.returncode == 1
+    assert "no OpenRouter API key" in result.stderr
+
+
+def test_placeholder_on_fail_still_accepts_explicit_yes_no(tmp_path: Path) -> None:
+    """The bundled SKILL.md always passes an explicit yes/no value."""
+    for value in ("yes", "no"):
+        result = _run_generate_image(tmp_path, "--placeholder-on-fail", value)
+        assert result.returncode == 1
+        assert "no OpenRouter API key" in result.stderr
+
+
+def test_placeholder_on_fail_rejects_other_values(tmp_path: Path) -> None:
+    result = _run_generate_image(tmp_path, "--placeholder-on-fail", "maybe")
+    assert result.returncode == 2
+    assert "invalid choice" in result.stderr

@@ -357,8 +357,9 @@ def main() -> int:
         help="Repeatable. Each is tried ONCE after the primary model exhausts its retries.",
     )
     parser.add_argument(
-        "--placeholder-on-fail", default="no", choices=["yes", "no"],
-        help="When every model refuses, write a solid-colour placeholder PNG instead of exiting non-zero. Default no.",
+        "--placeholder-on-fail", nargs="?", const="yes", default="no", choices=["yes", "no"],
+        help="When every model refuses, write a solid-colour placeholder PNG instead of exiting non-zero. "
+        "Bare flag means yes; also accepts an explicit yes/no value. Default no.",
     )
     parser.add_argument(
         "--retry-backoff-cap", type=int, default=8,
