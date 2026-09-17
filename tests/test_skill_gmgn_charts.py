@@ -105,6 +105,101 @@ def test_a_row_missing_any_ohlc_field_is_dropped_rather_than_zero_filled() -> No
     assert [candle["time"] for candle in module.convert_candles(rows)] == [200]
 
 
+def test_a_non_finite_ohlc_field_is_dropped_rather_than_written_as_nan() -> None:
+    # ``json.loads`` accepts bare NaN/Infinity tokens even though they are not
+    # valid JSON, so a row like this can reach the converter without ever
+    # raising a JSONDecodeError. Before this field is filtered the candle
+    # survives into the written artifact as a literal ``NaN``, which is not
+    # strict JSON and breaks a parser that rejects it (e.g. the Web chat's).
+    module = load_converter()
+    rows = [
+        {"time": 100, "open": float("nan"), "high": 2, "low": 1, "close": 1.5},
+        {"time": 200, "open": 1, "high": float("inf"), "low": 1, "close": 1.5},
+        {"time": 300, "open": 1, "high": 2, "low": float("-inf"), "close": 1.5},
+        # The same values, but arriving as strings — ``float()`` parses these
+        # tokens too, so the string branch needs the same guard.
+        {"time": 400, "open": "NaN", "high": "2", "low": "1", "close": "1.5"},
+        {"time": 500, "open": "1", "high": "Infinity", "low": "1", "close": "1.5"},
+        # A genuinely usable row must still come through.
+        {"time": 600, "open": "1", "high": "2", "low": "1", "close": "1.5"},
+    ]
+
+    candles = module.convert_candles(rows)
+
+    assert [candle["time"] for candle in candles] == [600]
+
+
+def test_a_non_finite_volume_is_omitted_not_carried() -> None:
+    module = load_converter()
+    base = {"open": "1", "high": "2", "low": "1", "close": "2"}
+    rows = [
+        {"time": 100, **base, "volume": float("inf")},
+        {"time": 200, **base, "volume": "NaN"},
+    ]
+
+    candles = module.convert_candles(rows)
+
+    assert "volume" not in candles[0]
+    assert "volume" not in candles[1]
+
+
+def test_written_artifact_is_always_strict_json_even_with_nan_in_the_input(
+    tmp_path: Any,
+) -> None:
+    """End to end: a NaN/Infinity candle must not reach the file on disk as one.
+
+    ``json.dumps`` defaults to ``allow_nan=True``, so if a non-finite value
+    slipped past ``_number`` it would be written to the artifact as a bare
+    ``NaN``/``Infinity`` token — syntactically invalid per the JSON spec, and
+    rejected by a strict parser such as the Web chat's ``JSON.parse``, even
+    though this script would have exited 0 and reported success.
+    """
+    import json as _json
+
+    module = load_converter()
+    infile = tmp_path / "kline.json"
+    outfile = tmp_path / "chart.json"
+    infile.write_text(
+        _json.dumps(
+            {
+                "list": [
+                    {
+                        "time": 1700000000000,
+                        "open": "NaN",
+                        "high": 2,
+                        "low": 1,
+                        "close": 1.5,
+                        "volume": 10,
+                    },
+                    {
+                        "time": 1700003600000,
+                        "open": 1.1,
+                        "high": 1.3,
+                        "low": 1.05,
+                        "close": 1.2,
+                        "volume": 50,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = module.main(["--input", str(infile), "--output", str(outfile)])
+
+    assert exit_code == 0
+    written = outfile.read_text(encoding="utf-8")
+    # The literal bytes on disk must never carry a bare NaN/Infinity token —
+    # that is what a strict `JSON.parse` (unlike Python's lenient `json.loads`)
+    # actually rejects, so this checks the text rather than trusting a
+    # permissive re-parse of it.
+    assert "NaN" not in written
+    assert "Infinity" not in written
+    parsed = _json.loads(written)
+    assert len(parsed["candles"]) == 1
+    assert parsed["candles"][0]["time"] == 1700003600
+
+
 def test_usd_volume_is_carried_and_a_negative_one_dropped() -> None:
     module = load_converter()
     base = {"open": "1", "high": "2", "low": "1", "close": "2"}
