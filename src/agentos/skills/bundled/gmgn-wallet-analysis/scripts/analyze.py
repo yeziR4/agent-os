@@ -2769,7 +2769,15 @@ def main(argv):
             d = json.load(fh)
         wallet = d.get("_wallet", "FIXTURE")
         chain = d.get("_chain", "sol")
-        gaps += d.get("_gaps", [])
+        fixture_gaps = d.get("_gaps", [])
+        if not isinstance(fixture_gaps, list):
+            print(
+                f"Error: fixture {fixture!r} field '_gaps' must be a list of strings, "
+                f"got {type(fixture_gaps).__name__}",
+                file=sys.stderr,
+            )
+            return 2
+        gaps += fixture_gaps
     else:
         if len(rest) < 2:
             print(__doc__)
