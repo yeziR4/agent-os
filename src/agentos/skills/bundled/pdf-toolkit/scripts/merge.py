@@ -25,6 +25,19 @@ from pathlib import Path
 from pypdf import PdfReader, PdfWriter
 
 
+def _page_number(token: str, spec: str) -> int:
+    """Parse one page-range bound, or raise :class:`ManifestError` naming it.
+
+    Plain ASCII digits only: rejects a missing bound (``"-5"``, ``"5-"``), a
+    doubled sign (``"1--3"``, which ``split("-", 1)`` would otherwise hand to
+    ``int()`` as ``"-3"`` and silently reinterpret as a descending range into
+    negative page numbers), and a non-ASCII digit ``int()`` itself rejects.
+    """
+    if not token.isascii() or not token.isdigit():
+        raise ManifestError(f"invalid page number {token!r} in page spec {spec!r}")
+    return int(token)
+
+
 def requested_pages(spec: str | None, total: int) -> list[int]:
     """Every page number *spec* asks for, in order, without clamping to *total*.
 
@@ -40,12 +53,12 @@ def requested_pages(spec: str | None, total: int) -> list[int]:
             continue
         if "-" in token:
             lo_s, hi_s = token.split("-", 1)
-            lo, hi = int(lo_s), int(hi_s)
+            lo, hi = _page_number(lo_s, spec), _page_number(hi_s, spec)
             if lo > hi:
                 lo, hi = hi, lo
             pages.extend(range(lo, hi + 1))
         else:
-            pages.append(int(token))
+            pages.append(_page_number(token, spec))
     return pages
 
 
@@ -113,6 +126,10 @@ def merge(items: Iterable[dict[str, str]], out: Path) -> MergeResult:
     zero-page PDF is not a merge that succeeded with nothing to do -- it is a
     merge whose every input was missing or out of range, and leaving a valid
     but empty file behind lets that pass for success.
+
+    Raises :class:`ManifestError` if any item's ``pages`` spec has a token
+    that is not a plain page number or range -- before ``out`` is opened, so
+    a rejected spec never leaves a partial file behind either.
     """
     writer = PdfWriter()
     result = MergeResult()
@@ -172,7 +189,11 @@ def main() -> int:
             return 2
     else:
         items = [{"file": p} for p in args.inputs]
-    result = merge(items, args.out)
+    try:
+        result = merge(items, args.out)
+    except ManifestError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if result.pages_written == 0:
         print(
             f"error: no requested page exists in any input; nothing written to {args.out}",

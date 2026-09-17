@@ -163,3 +163,34 @@ def test_requested_pages_keeps_what_parse_ranges_drops() -> None:
     assert merge.requested_pages("1,99", 4) == [1, 99]
     assert merge.requested_pages(None, 3) == [1, 2, 3]
     assert merge.requested_pages("5-3", 10) == [3, 4, 5]
+
+
+@pytest.mark.parametrize(
+    "spec",
+    ["1-3, all", "-5", "5-", "1--3", "abc", "1,²"],
+)
+def test_requested_pages_rejects_a_malformed_token_instead_of_crashing(spec: str) -> None:
+    merge = _merge_module()
+
+    with pytest.raises(merge.ManifestError):
+        merge.requested_pages(spec, 10)
+
+
+def test_main_rejects_a_malformed_page_spec_and_writes_nothing(
+    three_and_two: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    merge = _merge_module()
+    a, _b = three_and_two
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps([{"file": str(a), "pages": "1-3, all"}]), encoding="utf-8")
+    out = tmp_path / "nested" / "c.pdf"
+    monkeypatch.setattr(sys, "argv", ["merge.py", str(manifest), "--out", str(out)])
+
+    assert merge.main() == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("error:")
+    assert "all" in captured.err
+    assert not out.exists()
+    assert not out.parent.exists(), "a rejected spec must not leave even the output directory"
