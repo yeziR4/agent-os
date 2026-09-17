@@ -464,6 +464,87 @@ async def test_http_request_env_overrides_download_limit(
     assert payload["size"] <= 200_000 + _STREAM_CHUNK, payload["size"]
 
 
+@pytest.mark.parametrize("raw_env_value", ["50000", "1"])
+def test_resolve_download_limit_below_one_chunk_is_floored_not_discarded(
+    monkeypatch: pytest.MonkeyPatch, raw_env_value: str
+) -> None:
+    """A configured cap smaller than one stream chunk must still shrink the
+    limit, floored at the chunk size -- not be silently discarded in favor of
+    the full, twenty-times-larger default (issue: AGENTOS_HTTP_DOWNLOAD_LIMIT
+    below one stream chunk was treated the same as an unparseable value)."""
+    monkeypatch.setenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", raw_env_value)
+
+    assert web._resolve_download_limit_bytes() == web._STREAM_CHUNK_BYTES
+
+
+@pytest.mark.parametrize("raw_env_value", ["0", "-5"])
+def test_resolve_download_limit_non_positive_value_is_invalid_not_a_floor(
+    monkeypatch: pytest.MonkeyPatch, raw_env_value: str
+) -> None:
+    """Zero and negative are not "a very small cap" -- they are unusable
+    configuration, so they fall back to the default the same way an
+    unparseable string does, rather than being floored like a genuinely small
+    positive value."""
+    monkeypatch.setenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", raw_env_value)
+
+    assert web._resolve_download_limit_bytes() == web._DOWNLOAD_LIMIT_BYTES
+
+
+def test_resolve_download_limit_respects_a_value_at_or_above_one_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", "200000")
+
+    assert web._resolve_download_limit_bytes() == 200_000
+
+
+def test_resolve_download_limit_still_caps_at_the_default_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", "5000000")
+
+    assert web._resolve_download_limit_bytes() == web._DOWNLOAD_LIMIT_BYTES
+
+
+def test_resolve_download_limit_ignores_unparseable_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", "not-a-number")
+
+    assert web._resolve_download_limit_bytes() == web._DOWNLOAD_LIMIT_BYTES
+
+
+def test_resolve_download_limit_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", raising=False)
+
+    assert web._resolve_download_limit_bytes() == web._DOWNLOAD_LIMIT_BYTES
+
+
+@pytest.mark.asyncio
+async def test_http_request_floors_a_sub_chunk_env_override_end_to_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a sub-chunk override must still cap the actual download at
+    the chunk floor, not silently fall back to serving up to the full default."""
+    monkeypatch.setenv("AGENTOS_HTTP_DOWNLOAD_LIMIT", "50000")
+    total = 5 * 1024 * 1024
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/octet-stream"},
+            stream=_AsyncBody(total),
+            request=request,
+        )
+
+    monkeypatch.setattr(web.httpx, "AsyncClient", lambda *a, **k: _StreamingAsyncClient(handler))
+
+    payload = json.loads(await _original_http_request()(url="https://example.test/huge"))
+
+    assert payload["download_capped"] is True
+    assert payload["size"] <= _STREAM_CHUNK + _STREAM_CHUNK, payload["size"]
+
+
 _STREAM_CHUNK = 65_536
 
 

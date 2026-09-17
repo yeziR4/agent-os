@@ -124,7 +124,18 @@ def _is_text_response_content_type(content_type: str) -> bool:
 
 
 def _resolve_download_limit_bytes() -> int:
-    """Resolve the hard download cap from env or the built-in default."""
+    """Resolve the hard download cap from env or the built-in default.
+
+    The env var only ever *shrinks* the cap below ``_DOWNLOAD_LIMIT_BYTES`` --
+    raising it is refused by the ``min()`` below. A configured value under one
+    stream chunk used to be treated the same as an unparseable one and silently
+    discarded, handing back the full default instead of the operator's smaller
+    number (up to 20x more data than they asked for, with nothing logged). It
+    is floored at ``_STREAM_CHUNK_BYTES`` instead, since that is the smallest
+    granularity the streaming loop in :func:`http_request` can enforce -- the
+    request still respects "smaller than default", just not smaller than one
+    chunk's worth of slack.
+    """
     raw = os.environ.get(_DOWNLOAD_LIMIT_ENV, "").strip()
     if not raw:
         return _DOWNLOAD_LIMIT_BYTES
@@ -132,9 +143,9 @@ def _resolve_download_limit_bytes() -> int:
         value = int(raw)
     except ValueError:
         return _DOWNLOAD_LIMIT_BYTES
-    return (
-        min(value, _DOWNLOAD_LIMIT_BYTES) if value >= _STREAM_CHUNK_BYTES else _DOWNLOAD_LIMIT_BYTES
-    )
+    if value <= 0:
+        return _DOWNLOAD_LIMIT_BYTES
+    return min(max(value, _STREAM_CHUNK_BYTES), _DOWNLOAD_LIMIT_BYTES)
 
 
 def _fetch_workspace_dir() -> Path:

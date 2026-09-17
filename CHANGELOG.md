@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `http_request`'s `AGENTOS_HTTP_DOWNLOAD_LIMIT` override treated any
+  configured value below one stream chunk (65,536 bytes) the same as an
+  unparseable one, silently discarding it and falling back to the full
+  1,000,000-byte default — up to 20x more than the operator configured, with
+  nothing logged. A sub-chunk value is now floored at the chunk size instead
+  of being thrown away.
+
 ## [2026.9.16] - 2026-09-16
 
 ### Fixed
