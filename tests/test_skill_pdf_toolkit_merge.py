@@ -163,3 +163,46 @@ def test_requested_pages_keeps_what_parse_ranges_drops() -> None:
     assert merge.requested_pages("1,99", 4) == [1, 99]
     assert merge.requested_pages(None, 3) == [1, 2, 3]
     assert merge.requested_pages("5-3", 10) == [3, 4, 5]
+
+
+@pytest.mark.parametrize("spec", ["all", "1-3, all", "-5", "5-", "1-", "1--3", "0", "1,0", "²"])
+def test_requested_pages_rejects_a_token_that_is_not_a_page_number(spec: str) -> None:
+    """Every spell that reached ``int()`` unguarded is named, not raised (#2501).
+
+    ``1--3`` used to be read as the range ``-3..1`` and ``²`` passes
+    ``str.isdigit`` while ``int`` still refuses it, so both belong here rather
+    than in the accepted forms.
+    """
+    merge = _merge_module()
+
+    with pytest.raises(merge.ManifestError, match="invalid page specification"):
+        merge.requested_pages(spec, 10)
+
+
+def test_merge_raises_manifest_error_for_a_malformed_pages_entry(
+    three_and_two: tuple[Path, Path], tmp_path: Path
+) -> None:
+    merge = _merge_module()
+    a, _ = three_and_two
+
+    with pytest.raises(merge.ManifestError, match="invalid page specification: 'all'"):
+        merge.merge([{"file": str(a), "pages": "1-3, all"}], tmp_path / "c.pdf")
+
+
+def test_main_reports_a_malformed_pages_spec_with_exit_code_2(
+    three_and_two: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """The command from the report: a structured error, and nothing written."""
+    merge = _merge_module()
+    a, _ = three_and_two
+    manifest = tmp_path / "m.json"
+    manifest.write_text(json.dumps([{"file": str(a), "pages": "1-3, all"}]), encoding="utf-8")
+    out = tmp_path / "c.pdf"
+    monkeypatch.setattr(sys, "argv", ["merge.py", str(manifest), "--out", str(out)])
+
+    assert merge.main() == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.strip() == "error: invalid page specification: 'all'"
+    assert not out.exists()

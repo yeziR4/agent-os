@@ -11,6 +11,10 @@ Manifest schema:
 Pages past the end of an input are never dropped silently: the summary lists
 them per file under ``skipped_pages``, and a merge that would write no page at
 all is an error rather than a zero-page PDF.
+
+A token that is neither a positive page number nor a ``lo-hi`` range --
+``abc``, ``5-``, ``-5`` -- is a :class:`ManifestError` reported as ``error:``
+and exit code 2 rather than a traceback.
 """
 
 from __future__ import annotations
@@ -52,6 +56,21 @@ def _write_stdout(text: str) -> None:
     sys.stdout.flush()
 
 
+def _page_number(text: str, token: str) -> int:
+    """The 1-based page number *text* names, or a `ManifestError` for *token*.
+
+    ``text`` is one side of a token, so it is empty for the open-ended spells
+    (``5-`` and ``-5``) that used to reach ``int("")``. ``isascii`` is checked
+    alongside ``isdigit`` because ``isdigit`` accepts superscripts -- ``"²"``
+    is a digit and `int` still refuses it.
+    """
+    digits = text.strip()
+    page = int(digits) if digits.isascii() and digits.isdigit() else 0
+    if page < 1:
+        raise ManifestError(f"invalid page specification: {token!r}")
+    return page
+
+
 def requested_pages(spec: str | None, total: int) -> list[int]:
     """Every page number *spec* asks for, in order, without clamping to *total*.
 
@@ -67,12 +86,12 @@ def requested_pages(spec: str | None, total: int) -> list[int]:
             continue
         if "-" in token:
             lo_s, hi_s = token.split("-", 1)
-            lo, hi = int(lo_s), int(hi_s)
+            lo, hi = _page_number(lo_s, token), _page_number(hi_s, token)
             if lo > hi:
                 lo, hi = hi, lo
             pages.extend(range(lo, hi + 1))
         else:
-            pages.append(int(token))
+            pages.append(_page_number(token, token))
     return pages
 
 
@@ -199,7 +218,11 @@ def main() -> int:
             return 2
     else:
         items = [{"file": p} for p in args.inputs]
-    result = merge(items, args.out)
+    try:
+        result = merge(items, args.out)
+    except ManifestError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if result.pages_written == 0:
         print(
             f"error: no requested page exists in any input; nothing written to {args.out}",
