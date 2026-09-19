@@ -413,3 +413,46 @@ def test_ollama_coerces_eval_token_counts(
     total_tokens += done.input_tokens
     total_tokens += done.output_tokens
     assert total_tokens == expected_input + expected_output
+
+
+def test_ollama_maps_stop_sequences_into_options_stop(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    _patch_transport(
+        monkeypatch,
+        captured,
+        (
+            '{"model":"llama3","message":{"role":"assistant","content":""},'
+            '"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}\n'
+        ),
+    )
+    provider = OllamaProvider(model="llama3")
+    cfg = ChatConfig(stop_sequences=["Observation:", "\nUser:"])
+
+    async def _run() -> list[Any]:
+        return [
+            event async for event in provider.chat([Message(role="user", content="Hi")], config=cfg)
+        ]
+
+    asyncio.run(_run())
+    assert captured["payload"]["options"]["stop"] == ["Observation:", "\nUser:"]
+
+
+def test_ollama_omits_stop_option_when_no_stop_sequences_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    _patch_transport(
+        monkeypatch,
+        captured,
+        (
+            '{"model":"llama3","message":{"role":"assistant","content":""},'
+            '"done":true,"done_reason":"stop","prompt_eval_count":1,"eval_count":1}\n'
+        ),
+    )
+    provider = OllamaProvider(model="llama3")
+
+    async def _run() -> list[Any]:
+        return [event async for event in provider.chat([Message(role="user", content="Hi")])]
+
+    asyncio.run(_run())
+    assert "stop" not in captured["payload"]["options"]

@@ -300,6 +300,8 @@ class OllamaProvider:
         }
         if cfg.temperature is not None:
             payload["options"]["temperature"] = cfg.temperature
+        if cfg.stop_sequences:
+            payload["options"]["stop"] = cfg.stop_sequences
         if tools:
             payload["tools"] = [_build_ollama_tool(t) for t in tools]
             # Ollama's native /api/chat exposes no forced tool_choice parameter,

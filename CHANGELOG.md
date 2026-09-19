@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Ollama provider: `ChatConfig.stop_sequences` is no longer silently
+  dropped from streaming requests. `OllamaProvider._stream` built its
+  `options` payload from `max_tokens` and `temperature` only, never mapping
+  configured stop sequences into `options.stop` the way `OpenAIProvider`
+  (`payload["stop"]`) and `AnthropicProvider` (`payload["stop_sequences"]`)
+  already do. A caller that set stop sequences on an Ollama model got no
+  error and no stopping behavior -- Ollama kept generating past the
+  configured boundary.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always
