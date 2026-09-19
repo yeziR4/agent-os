@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `docx` skill: `create_docx.py` no longer crashes with an unhandled
+  `KeyError`/`ValueError` when a paragraph spec names a style that isn't
+  defined in the default template, or names a style of the wrong type (e.g.
+  a table style used for a paragraph). It now falls back to `Normal` and
+  prints a warning to stderr, the same "sanitize, don't crash" contract the
+  script already applies to an out-of-range heading `level`.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always

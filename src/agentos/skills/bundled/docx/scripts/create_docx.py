@@ -52,7 +52,18 @@ def build(spec: Any) -> Document:
             doc.add_heading(str(item.get("text", "")), level=level)
         elif kind == "paragraph":
             style = item.get("style") or "Normal"
-            doc.add_paragraph(str(item.get("text", "")), style=style)
+            text = str(item.get("text", ""))
+            try:
+                doc.add_paragraph(text, style=style)
+            except (KeyError, ValueError):
+                # Unrecognized style name, or a style of the wrong type (e.g. a
+                # character/table style used where a paragraph style is expected).
+                # python-docx raises rather than falling back on its own.
+                print(
+                    f"warning: unrecognized paragraph style '{style}', using 'Normal'",
+                    file=sys.stderr,
+                )
+                doc.add_paragraph(text, style="Normal")
         elif kind == "table":
             raw_rows = item.get("rows")
             if not isinstance(raw_rows, (list, tuple)):

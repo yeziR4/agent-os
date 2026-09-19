@@ -641,6 +641,36 @@ def test_create_docx_cli_reports_invalid_json_with_exit_code_2(
     assert not out.exists()
 
 
+def test_build_falls_back_to_normal_for_an_unrecognized_paragraph_style(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A default `python-docx` template has no 'Callout' style -- must not crash."""
+    create_docx = _create_docx_module()
+
+    doc = create_docx.build(
+        {"body": [{"kind": "paragraph", "text": "Important note", "style": "Callout"}]}
+    )
+
+    assert doc.paragraphs[0].text == "Important note"
+    assert doc.paragraphs[0].style.name == "Normal"
+    assert "Callout" in capsys.readouterr().err
+
+
+def test_build_falls_back_to_normal_for_a_non_paragraph_style_type(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A style that exists but is the wrong type (e.g. a table style) also raises."""
+    create_docx = _create_docx_module()
+
+    doc = create_docx.build(
+        {"body": [{"kind": "paragraph", "text": "Row text", "style": "Table Grid"}]}
+    )
+
+    assert doc.paragraphs[0].text == "Row text"
+    assert doc.paragraphs[0].style.name == "Normal"
+    assert "Table Grid" in capsys.readouterr().err
+
+
 def test_create_docx_cli_reports_non_object_json_with_exit_code_2(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
