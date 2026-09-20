@@ -550,7 +550,10 @@ def _find_turn_boundary_cut(
 
     The cut is placed at a turn boundary — where the last removed entry is
     NOT an assistant message with a pending tool call, and the first kept
-    entry is NOT a tool result that belongs to a removed tool call.
+    entry is NOT a tool result that belongs to a removed tool call. This
+    holds even when a turn has several parallel tool calls: the first kept
+    entry must not be any tool result in that run, not just the one
+    immediately after the removed assistant message.
 
     Strategy:
     1. Start from the token-budget cut (walk from the end, accumulate up to budget).
@@ -578,19 +581,21 @@ def _find_turn_boundary_cut(
         return 0
 
     # Walk backward from legacy_keep_start toward index 1 looking for a clean
-    # turn boundary. A clean boundary: the last removed entry (index cut-1)
-    # is NOT an assistant message that ends with a tool call whose result is
-    # the first kept entry.
+    # turn boundary. A clean boundary requires both:
+    #   - the first kept entry is NOT a tool result (it would be orphaned,
+    #     missing the assistant tool-call message that precedes it — this can
+    #     be true even when the immediately preceding removed entry is itself
+    #     another tool result, e.g. mid-way through a run of parallel tool
+    #     calls sharing one assistant message); and
+    #   - the last removed entry is NOT an assistant message with a pending
+    #     tool call (its result(s) must not be split off into the kept set).
     cut = legacy_keep_start
     while cut > 0:
         last_removed = entries[cut - 1]
         first_kept = entries[cut] if cut < len(entries) else None
 
-        # Mid-turn: assistant tool call removed, tool result would be first kept.
-        if _is_assistant_tool_call_entry(last_removed) and _is_tool_result_entry(
-            first_kept
-        ):
-            # Move cut one step earlier to avoid splitting the pair.
+        if _is_tool_result_entry(first_kept) or _is_assistant_tool_call_entry(last_removed):
+            # Move cut one step earlier to avoid orphaning a tool call/result.
             cut -= 1
             continue
 

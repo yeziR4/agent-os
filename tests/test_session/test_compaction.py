@@ -5,6 +5,7 @@ import pytest
 from agentos.session.compaction import (
     CompactionConfig,
     CompactionRequest,
+    _find_turn_boundary_cut,
     call_compaction_llm,
     compact_context,
     estimate_entry_replay_tokens,
@@ -115,6 +116,47 @@ def test_replay_token_estimate_uses_tool_payload_summary_not_raw_arguments():
     tokens = estimate_entry_replay_tokens(entry)
 
     assert tokens < 500
+
+
+def test_turn_boundary_cut_does_not_orphan_a_parallel_tool_result():
+    """A turn with parallel tool calls must not be split mid-way through.
+
+    Regression test for a bug where the boundary-cut loop only checked
+    whether the entry immediately before the cut was an assistant
+    tool-call message — so landing between two tool results belonging to
+    the *same* assistant message (a common shape for parallel tool calls)
+    was wrongly treated as a clean boundary, because the entry right
+    before the cut was itself a tool result, not the assistant message.
+    """
+    entries = [
+        {"role": "user", "content": "analyze files"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "read_file"}},
+                {"id": "call_2", "function": {"name": "read_file"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "file 1 data " * 50},
+        {"role": "tool", "tool_call_id": "call_2", "content": "file 2 data"},
+        {"role": "assistant", "content": "Analysis complete."},
+    ]
+
+    # A budget that (pre-fix) landed the legacy token-budget cut squarely
+    # between the two tool results, i.e. right after call_1's result.
+    cut = _find_turn_boundary_cut(entries, keep_budget=30)
+
+    kept = entries[cut:]
+    assert kept, "compaction must not drop every entry"
+    first_kept = kept[0]
+    assert first_kept.get("role") != "tool" and not first_kept.get("tool_call_id"), (
+        f"kept slice must not start with an orphaned tool result: {first_kept!r}"
+    )
+    # The clean boundary here is right before the assistant message that
+    # issued both parallel tool calls, keeping the whole turn intact.
+    assert cut == 1
+    assert entries[cut]["tool_calls"][0]["id"] == "call_1"
 
 
 @pytest.mark.asyncio
