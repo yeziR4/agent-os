@@ -3,6 +3,8 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+
 from agentos.engine.usage import UsageTracker
 from agentos.gateway import rpc_usage
 from agentos.gateway.rpc.registry import RpcContext
@@ -535,6 +537,36 @@ def test_usage_cost_breakdown_carries_cache_fields() -> None:
     assert row["costUsd"] == 0.04
     assert row["estimatedCostUsd"] == 0.04
     assert row["costSource"] == "agentos_estimate"
+
+
+def test_usage_cost_filtered_with_no_matches_returns_empty_breakdown() -> None:
+    """A filter that legitimately matches nothing must return an empty result.
+
+    Regression test for a bug where `usage.cost` treated "the ledger has a
+    real tracker but the filter matched zero rows" the same as "there is no
+    ledger to query at all", and raised ValueError instead of returning
+    `{"breakdown": [], "totalCostUsd": 0.0}`.
+    """
+    sm = _FakeSessionManager([])
+    ctx = _ctx(session_manager=sm, usage_tracker=UsageTracker())
+
+    payload = asyncio.run(_handle_usage_cost({"toolName": "non_existent_tool"}, ctx))
+
+    assert payload == {"breakdown": [], "totalCostUsd": 0.0}
+
+
+def test_usage_cost_filtered_with_no_tracker_still_raises() -> None:
+    """Without a real ledger to consult, a filtered query still can't be answered.
+
+    The session-level fallback has no per-tool/per-skill/per-date data, so a
+    filtered request with no usage_tracker at all must still raise rather
+    than silently ignore the filter.
+    """
+    sm = _FakeSessionManager([])
+    ctx = _ctx(session_manager=sm, usage_tracker=None)
+
+    with pytest.raises(ValueError):
+        asyncio.run(_handle_usage_cost({"toolName": "non_existent_tool"}, ctx))
 
 
 def test_usage_cost_exposes_session_timestamp_aliases() -> None:

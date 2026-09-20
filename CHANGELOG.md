@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Gateway: `usage.cost` no longer raises `ValueError` (surfacing as an
+  `INVALID_REQUEST` RPC error, e.g. from `agentos cost --tool-name X`) when
+  a `tool_name`/`skill`/`start_date`/`end_date` filter legitimately matches
+  zero cost records. That path previously treated "the ledger has real data
+  but the filter matched nothing" the same as "there is no ledger to query
+  at all", for which the session-level fallback genuinely can't honor a
+  filter. A filtered query with no matches now returns a graceful empty
+  `{"breakdown": [], "totalCostUsd": 0.0}` instead of erroring.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always

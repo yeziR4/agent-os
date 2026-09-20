@@ -657,17 +657,21 @@ async def _handle_usage_cost(params: dict | None, ctx: RpcContext) -> dict[str, 
     if ctx.usage_tracker is not None:
         rows = ctx.usage_tracker.query_usage(**query_params)
 
-    if not rows and ctx.session_manager is not None:
-        if (
-            query_params.get("tool_name")
-            or query_params.get("skill")
-            or query_params.get("start_date")
-            or query_params.get("end_date")
-        ):
-            raise ValueError(
-                "The cost ledger returned no records, and the fallback session-level summary "
-                "cannot filter by tool name, skill, or date range."
-            )
+    filters_requested = bool(
+        query_params.get("tool_name")
+        or query_params.get("skill")
+        or query_params.get("start_date")
+        or query_params.get("end_date")
+    )
+
+    no_ledger_to_query = ctx.usage_tracker is None and ctx.session_manager is not None
+    if not rows and filters_requested and no_ledger_to_query:
+        raise ValueError(
+            "The cost ledger returned no records, and the fallback session-level summary "
+            "cannot filter by tool name, skill, or date range."
+        )
+
+    if not rows and not filters_requested and ctx.session_manager is not None:
         try:
             sessions = await ctx.session_manager.list_sessions()
             for s in sessions:
