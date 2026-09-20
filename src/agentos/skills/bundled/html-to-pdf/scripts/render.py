@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -18,6 +19,26 @@ PAGE_SIZES = {
 def _is_url(spec: str) -> bool:
     parsed = urlparse(spec)
     return parsed.scheme in {"http", "https", "file"}
+
+
+class _CssWarningCollector(logging.Handler):
+    """Collects WeasyPrint's own parse warnings without touching global logging.
+
+    WeasyPrint's CSS parser follows CSS error-recovery rules: an unrecognized
+    property value (e.g. a typo'd ``--page-size Letterr``) is silently dropped,
+    and rendering falls back to the UA default page size (A4) with no
+    exception and nothing on stderr — the PDF is written and the script exits
+    0 as if the requested size had been honoured. WeasyPrint does report the
+    drop, but only via its own ``weasyprint`` logger, so that is what has to
+    be inspected to tell a genuine size from a silently ignored one.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(level=logging.WARNING)
+        self.messages: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.messages.append(record.getMessage())
 
 
 def render(html_spec: str, out_path: Path, page_size: str | None) -> None:
@@ -42,7 +63,20 @@ def render(html_spec: str, out_path: Path, page_size: str | None) -> None:
     stylesheets: list[CSS] = []
     if page_size:
         normalized = PAGE_SIZES.get(page_size.lower(), page_size)
-        stylesheets.append(CSS(string=f"@page {{ size: {normalized}; }}"))
+        collector = _CssWarningCollector()
+        weasyprint_logger = logging.getLogger("weasyprint")
+        weasyprint_logger.addHandler(collector)
+        try:
+            css = CSS(string=f"@page {{ size: {normalized}; }}")
+        finally:
+            weasyprint_logger.removeHandler(collector)
+        if collector.messages:
+            print(
+                f"error: invalid --page-size {page_size!r} — " + "; ".join(collector.messages),
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        stylesheets.append(css)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     html.write_pdf(target=str(out_path), stylesheets=stylesheets or None)
