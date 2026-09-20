@@ -524,15 +524,6 @@ def _merge_summaries(summaries: list[str]) -> str:
     return "\n".join(merged_lines)
 
 
-def _is_assistant_tool_call_entry(entry: dict[str, Any]) -> bool:
-    if entry.get("role") != "assistant":
-        return False
-    if entry.get("tool_calls"):
-        return True
-    content = str(entry.get("content") or "")
-    return "[tool_call:" in content or "[Used tool:" in content
-
-
 def _is_tool_result_entry(entry: dict[str, Any] | None) -> bool:
     if entry is None:
         return False
@@ -548,9 +539,11 @@ def _find_turn_boundary_cut(
 ) -> int:
     """Return the index of the first entry to keep (the cut point).
 
-    The cut is placed at a turn boundary — where the last removed entry is
-    NOT an assistant message with a pending tool call, and the first kept
-    entry is NOT a tool result that belongs to a removed tool call.
+    The cut is placed at a turn boundary — where the first kept entry is NOT
+    a tool result that belongs to a removed tool call. This also covers a
+    turn with several parallel tool calls: as long as the first kept entry
+    is one of the tool results, the cut keeps walking back, so it can never
+    land between two tool results and orphan the later one(s).
 
     Strategy:
     1. Start from the token-budget cut (walk from the end, accumulate up to budget).
@@ -578,18 +571,17 @@ def _find_turn_boundary_cut(
         return 0
 
     # Walk backward from legacy_keep_start toward index 1 looking for a clean
-    # turn boundary. A clean boundary: the last removed entry (index cut-1)
-    # is NOT an assistant message that ends with a tool call whose result is
-    # the first kept entry.
+    # turn boundary. A clean boundary: the first kept entry (index cut) is
+    # NOT a tool result.
     cut = legacy_keep_start
     while cut > 0:
-        last_removed = entries[cut - 1]
         first_kept = entries[cut] if cut < len(entries) else None
 
-        # Mid-turn: assistant tool call removed, tool result would be first kept.
-        if _is_assistant_tool_call_entry(last_removed) and _is_tool_result_entry(
-            first_kept
-        ):
+        # Mid-turn: the first kept entry is itself a tool result. This covers
+        # both a single tool call/result pair and a run of several parallel
+        # tool results — walk back past all of them until the first kept
+        # entry is no longer a tool result (so it can't be an orphan).
+        if _is_tool_result_entry(first_kept):
             # Move cut one step earlier to avoid splitting the pair.
             cut -= 1
             continue

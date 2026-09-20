@@ -7,6 +7,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- Session compaction: `_find_turn_boundary_cut` only checked whether the
+  entry immediately after the cut was a tool result belonging to the
+  immediately preceding assistant tool call. When an assistant turn issued
+  *parallel* tool calls, a cut landing between two of that turn's tool
+  results (last removed = one tool result, first kept = another) slipped
+  past the check and kept a `role: tool` entry with no preceding assistant
+  `tool_calls` message, producing a transcript that upstream providers
+  reject with an HTTP 400 on the session's next turn. The cut now walks
+  back past every tool result in the run, not just one, until the first
+  kept entry can't be an orphan (#3077).
 - Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
   (`_read_child_result`) read a session's transcript through
   `SessionStorage.get_transcript`'s `limit`, which windows from the

@@ -100,7 +100,7 @@ async def test_new_avoids_mid_turn_cut():
         {"role": "user", "content": "q1", "token_count": 5},
         {
             "role": "assistant",
-            "content": "[tool_call:read_file({\"path\": \"x\"})]",
+            "content": '[tool_call:read_file({"path": "x"})]',
             "token_count": 5,
         },
         {"role": "tool", "content": "[tool_result:read_file] contents", "token_count": 5},
@@ -163,6 +163,56 @@ async def test_new_avoids_mid_turn_cut_for_agent_flattened_tool_blocks():
     kept = result.kept_entries
     assert removed[-1]["content"] != "[Used tool: read_file]"
     assert kept[0]["content"] == "[Used tool: read_file]"
+
+
+@pytest.mark.asyncio
+async def test_new_avoids_orphaning_tool_result_in_parallel_tool_call_turn():
+    """A cut landing between two parallel tool results must not keep the
+    second one without its initiating assistant tool_calls message.
+
+    Replay-token estimates (via ``estimate_entry_replay_tokens``, which adds
+    a tool_calls/tool_call_id surcharge on top of ``token_count``) come out
+    to [10, 27, 7, 7, 3, 3] for the entries below (total=57). window=30 ->
+    keep_budget=15. Walking from the end: answer(3)+q2(3)+result_2(7)=13
+    <=15, then +result_1(7)=20>15 stops -> the legacy cut lands right on
+    result_2, so last_removed=result_1 (a tool entry, not an assistant
+    tool_call entry) and the old turn-boundary check broke immediately,
+    leaving result_2 as the first kept entry with no preceding assistant
+    tool_calls message.
+    """
+    entries = [
+        {"role": "user", "content": "q1", "token_count": 10},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function"},
+                {"id": "call_2", "type": "function"},
+            ],
+            "token_count": 4,
+        },
+        {"role": "tool", "content": "result 1", "tool_call_id": "call_1", "token_count": 4},
+        {"role": "tool", "content": "result 2", "tool_call_id": "call_2", "token_count": 4},
+        {"role": "user", "content": "q2", "token_count": 3},
+        {"role": "assistant", "content": "answer", "token_count": 3},
+    ]
+    request = CompactionRequest(
+        session_id="parallel-tool-call-boundary-test",
+        entries=entries,
+        context_window_tokens=30,
+        config=CompactionConfig(safety_margin=1.0),
+    )
+
+    result = await compact_context_new(request)
+
+    assert result.removed_count > 0
+    kept = result.kept_entries
+    assert kept[0].get("role") != "tool", (
+        f"Cut orphaned a tool result: first kept entry is {kept[0]!r}"
+    )
+    assert kept[0].get("tool_calls"), (
+        f"Kept slice must start with the assistant tool_calls message: {kept[0]!r}"
+    )
 
 
 @pytest.mark.asyncio
