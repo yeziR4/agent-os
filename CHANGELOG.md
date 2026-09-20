@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `deep-research` skill: an evidence field sent as JSON `null` (`title`,
+  `excerpt`, `fetched_at`, or `url`) recorded as the literal four-character
+  string `"None"` instead of an empty string, because `dict.get(key, "")`
+  only falls back to its default when `key` is *absent*, not when it is
+  present with value `null`. The compiled report then rendered `"None"`
+  straight into a Findings bullet and a References citation as if it were
+  real content. `iterate.py`'s `record_evidence` now coerces `None` fields
+  to `""`, matching how an absent field already behaved.
 - Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
   (`_read_child_result`) read a session's transcript through
   `SessionStorage.get_transcript`'s `limit`, which windows from the

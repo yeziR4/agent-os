@@ -38,6 +38,22 @@ def under_target(plan: Plan) -> list[dict[str, object]]:
     return out
 
 
+def _clean_str(value: object) -> str:
+    """Coerce an evidence field to ``str``, treating JSON ``null`` as "".
+
+    ``dict.get(key, default)`` only falls back to ``default`` when ``key`` is
+    *absent* — a key present with value ``null`` still returns ``None``, and
+    ``str(None)`` is the four-character string ``"None"``. The evidence
+    schema SKILL.md documents has ``title``/``excerpt``/``fetched_at`` (and
+    sometimes ``url``, for a still-being-filled-in item) as strings the host
+    may not have yet, and JSON ``null`` is the natural way to spell that. Left
+    unguarded, that ``"None"`` is recorded into the plan and then rendered
+    straight into the compiled report's citation and findings bullet as if it
+    were real content.
+    """
+    return "" if value is None else str(value)
+
+
 def record_evidence(plan: Plan, evidence: list[dict[str, object]]) -> int:
     by_id = {sq.id: sq for sq in plan.subquestions}
     added = 0
@@ -48,11 +64,11 @@ def record_evidence(plan: Plan, evidence: list[dict[str, object]]) -> int:
         sq = by_id[sq_id]
         sq.sources.append(
             Source(
-                url=str(item.get("url", "")),
-                title=str(item.get("title", "")),
-                excerpt=str(item.get("excerpt", "")),
+                url=_clean_str(item.get("url", "")),
+                title=_clean_str(item.get("title", "")),
+                excerpt=_clean_str(item.get("excerpt", "")),
                 relevance=float(item.get("relevance", 0.0)),
-                fetched_at=str(item.get("fetched_at", "")),
+                fetched_at=_clean_str(item.get("fetched_at", "")),
             )
         )
         added += 1
