@@ -77,6 +77,73 @@ def test_audio_transcription_route_rejects_wrong_token() -> None:
     assert fake.requests == []
 
 
+def test_audio_transcription_route_closes_form_after_success() -> None:
+    fake = _FakeProvider()
+    client = _client(fake)
+
+    captured: list = []
+    from starlette.datastructures import UploadFile
+
+    orig_init = UploadFile.__init__
+
+    def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        orig_init(self, *args, **kwargs)
+        captured.append(self)
+
+    UploadFile.__init__ = patched_init  # type: ignore[method-assign]
+    try:
+        response = client.post(
+            "/api/audio/transcribe",
+            headers={"Authorization": "Bearer token-123"},
+            files={"file": ("voice.webm", b"spoken", "audio/webm")},
+        )
+    finally:
+        UploadFile.__init__ = orig_init  # type: ignore[method-assign]
+
+    assert response.status_code == 200
+    assert len(captured) == 1
+    assert captured[0].file.closed is True
+
+
+def test_audio_transcription_route_closes_form_after_provider_error() -> None:
+    class _FailingProvider:
+        async def transcribe_audio(self, request):
+            raise RuntimeError("boom")
+
+    app = Starlette()
+    config = GatewayConfig()
+    config.auth.mode = "token"
+    config.auth.token = "token-123"
+    config.audio.enabled = True
+    register_audio_transcription_routes(
+        app, config=config, provider_factory=lambda _cfg: _FailingProvider()
+    )
+    client = TestClient(app)
+
+    captured: list = []
+    from starlette.datastructures import UploadFile
+
+    orig_init = UploadFile.__init__
+
+    def patched_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        orig_init(self, *args, **kwargs)
+        captured.append(self)
+
+    UploadFile.__init__ = patched_init  # type: ignore[method-assign]
+    try:
+        response = client.post(
+            "/api/audio/transcribe",
+            headers={"Authorization": "Bearer token-123"},
+            files={"file": ("voice.webm", b"spoken", "audio/webm")},
+        )
+    finally:
+        UploadFile.__init__ = orig_init  # type: ignore[method-assign]
+
+    assert response.status_code == 502
+    assert len(captured) == 1
+    assert captured[0].file.closed is True
+
+
 def test_audio_transcription_route_transcribes_multipart_audio() -> None:
     fake = _FakeProvider()
     client = _client(fake)
