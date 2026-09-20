@@ -152,14 +152,75 @@ async def test_repository_without_a_commit_still_diffs(empty_repo: Path) -> None
 async def test_diff_revision_resolves_head_only_when_a_commit_exists(
     empty_repo: Path,
 ) -> None:
-    """Unit-level pin on the branch the fallback hangs off."""
-    assert await git._diff_revision(str(empty_repo)) is None
+    """Unit-level pin on the branch the fallback hangs off.
+
+    Before the first commit, the fallback must be a real tree-ish the caller
+    can hand straight to ``git diff`` -- not ``None`` (#3072): the empty-tree
+    hash, which ``git cat-file -t`` resolves as an actual ``tree`` object.
+    """
+    revision = await git._diff_revision(str(empty_repo))
+    assert revision != "HEAD"
+    _git(empty_repo, "cat-file", "-t", revision)
 
     (empty_repo / "first.txt").write_text("hello\n", encoding="utf-8", newline="\n")
     _git(empty_repo, "add", "-A")
     _git(empty_repo, "commit", "-qm", "init")
 
     assert await git._diff_revision(str(empty_repo)) == "HEAD"
+
+
+async def test_repository_without_a_commit_reports_a_staged_and_further_edited_file(
+    empty_repo: Path,
+) -> None:
+    """The exact #3072 repro: staged, then modified again without re-staging.
+
+    Dropping the revision and forcing ``--cached`` (the pre-fix behaviour)
+    shows only the staged half (``line1``); the unstaged ``line2`` edit goes
+    missing from the combined view the tool's description promises.
+    """
+    (empty_repo / "f.txt").write_text("line1\n", encoding="utf-8", newline="\n")
+    _git(empty_repo, "add", "f.txt")
+    (empty_repo / "f.txt").write_text("line1\nline2\n", encoding="utf-8", newline="\n")
+
+    out = await git.git_diff()
+
+    assert "+line1" in out
+    assert "+line2" in out
+
+
+async def test_cached_mode_before_the_first_commit_in_a_sha256_repository(
+    tmp_path: Path,
+) -> None:
+    """The empty-tree hash differs by object format -- the SHA-1 constant
+    (``4b825dc6...``) is not a valid tree-ish in a ``--object-format=sha256``
+    repository, so a fix that hard-codes it fails this exact case (``fatal:
+    ambiguous argument``) even though the ordinary SHA-1 tests above pass.
+    """
+    repo = tmp_path / "sha256-repo"
+    repo.mkdir()
+    init = subprocess.run(
+        ["git", "init", "-q", "--object-format=sha256", "."],
+        cwd=repo,
+        capture_output=True,
+    )
+    if init.returncode != 0:
+        pytest.skip(f"git lacks sha256 repository support: {init.stderr.decode()!r}")
+
+    configure_runtime(
+        SandboxSettings(sandbox=False, security_grading=False, allow_legacy_mode=True),
+        workspace=repo,
+    )
+    token = current_tool_context.set(ToolContext(workspace_dir=str(repo)))
+    try:
+        (repo / "f.txt").write_text("hello\n", encoding="utf-8", newline="\n")
+        _git(repo, "add", "f.txt")
+
+        out = await git.git_diff()
+    finally:
+        current_tool_context.reset(token)
+        reset_runtime()
+
+    assert "+hello" in out
 
 
 @pytest.mark.parametrize(

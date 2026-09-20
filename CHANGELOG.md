@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `git_diff` tool: before the first commit, the combined (staged + unstaged)
+  view dropped the revision and forced `--cached`, so a file that was staged
+  and then further modified without re-staging had its unstaged edit go
+  missing. It now diffs against the repository's empty-tree hash instead,
+  matching `git diff HEAD`'s combined semantics before HEAD exists to spell
+  it -- the same fix already applied to the bundled `git-diff` skill script.
 - Discord channel: a reaction added to the bot's own message in a guild
   channel or thread is no longer silently dropped by the group mention
   gate. `is_group_mentioned` fell back to searching a reaction's (always

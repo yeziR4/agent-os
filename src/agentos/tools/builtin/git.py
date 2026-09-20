@@ -142,20 +142,38 @@ async def git_status(workdir: str | None = None) -> str:
     return await _run_git("status", "--short", "--branch", cwd=_effective_workdir(workdir))
 
 
-async def _diff_revision(cwd: str | None) -> str | None:
-    """``"HEAD"`` when the repository has a commit to diff against, else ``None``.
+async def _diff_revision(cwd: str | None) -> str:
+    """``"HEAD"`` when the repository has a commit to diff against, else the
+    empty-tree hash for the repository's own object format.
 
     ``git diff HEAD`` is the spelling that reports staged and unstaged work in
     one pass, but it exits 128 with ``ambiguous argument 'HEAD'`` before the
-    first commit lands. There the index is the entire change set, so the caller
-    drops the revision and lets ``--cached`` carry it rather than failing a
-    diff that plain ``git diff`` used to answer.
+    first commit lands. Dropping the revision there and forcing ``--cached``
+    only reports the staged half of the change set -- a file staged and then
+    further modified unstaged has that unstaged edit go missing (#3072). A
+    one-argument ``git diff <tree-ish>`` against the *empty* tree keeps the
+    same combined, both-halves semantics before HEAD exists to spell it.
+
+    The empty tree's hash is asked of git rather than hard-coded: it is
+    ``4b825dc6...`` in a SHA-1 repository but a different value in a
+    ``--object-format=sha256`` one, and a hard-coded SHA-1 spelling is not a
+    valid tree-ish in the newer format. ``git hash-object -t tree`` reading
+    ``os.devnull`` (zero bytes, same content as an empty ``--stdin``) computes
+    the id for whichever object format the repository actually uses, with no
+    stdin plumbing needed through the sandboxed backend.
     """
     try:
         await _run_git("rev-parse", "--verify", "--quiet", "HEAD", cwd=cwd)
     except RuntimeError:
-        return None
-    return "HEAD"
+        pass
+    else:
+        return "HEAD"
+    try:
+        output = await _run_git("hash-object", "-t", "tree", os.devnull, cwd=cwd)
+    except RuntimeError:
+        return "HEAD"
+    empty_tree = output.strip()
+    return empty_tree or "HEAD"
 
 
 def _git_diff_argv(a: dict[str, Any]) -> tuple[str, ...]:
@@ -202,14 +220,14 @@ async def git_diff(
     # description promises. On a tree the caller has just ``git add -A``-ed
     # that is the whole change set, returned as an empty string with no error,
     # which reads as "nothing to review" rather than as a wrong question (#1963).
-    # ``HEAD`` is the revision that reports both halves, and is the spelling the
-    # bundled ``git-diff`` skill already uses.
+    # ``HEAD`` (or the empty-tree hash before the first commit) is the revision
+    # that reports both halves, and is the spelling the bundled ``git-diff``
+    # skill already uses.
     revision = await _diff_revision(cwd)
     args = ["diff"]
-    if staged or revision is None:
+    if staged:
         args.append("--cached")
-    if revision is not None:
-        args.append(revision)
+    args.append(revision)
     if path:
         _reject_foreign_git_path(path)
         args += ["--", path]
