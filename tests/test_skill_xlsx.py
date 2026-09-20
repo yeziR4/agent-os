@@ -287,6 +287,125 @@ def test_inspect_reports_the_escaped_formula_without_an_apostrophe(
     assert reported["type"] == "s"
 
 
+def test_merge_cells_applies_a_non_overlapping_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Positive control: an ordinary merge is unaffected by the overlap guard."""
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    create_xlsx.build({"sheets": [{"name": "S", "rows": [["a", "b"]]}]}).save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "merge_cells", "sheet": "S", "range": "A1:B1"}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    from openpyxl import load_workbook
+
+    assert [str(r) for r in load_workbook(str(out))["S"].merged_cells.ranges] == ["A1:B1"]
+
+
+def test_merge_cells_skips_a_range_overlapping_an_existing_merge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A merge that shares a cell with one already on the sheet is refused.
+
+    openpyxl does not reject an overlapping merge itself -- it adds both
+    ranges and blanks every non-top-left cell each one covers, so applying
+    this op would silently discard whatever value sat in the shared cell and
+    leave the workbook with two merged ranges that overlap, which Excel
+    treats as corrupt. The op must be skipped and left out of ``applied``
+    rather than reported as a successful edit.
+    """
+    from openpyxl import Workbook, load_workbook
+
+    src = tmp_path / "book.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "S"
+    ws["A1"] = "header"
+    ws["B2"] = "important data"
+    ws.merge_cells("A1:B2")
+    wb.save(str(src))
+
+    _, edit_xlsx, _ = _import_scripts()
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [{"op": "merge_cells", "sheet": "S", "range": "B2:C3"}],
+        tmp_path,
+    )
+
+    assert report == {"applied": 0}
+    reloaded = load_workbook(str(out))["S"]
+    assert [str(r) for r in reloaded.merged_cells.ranges] == ["A1:B2"]
+
+
+def test_merge_cells_skips_an_overlap_introduced_earlier_in_the_same_op_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The overlap check also catches two merges within one op list.
+
+    Reproduces the issue's exact scenario: nothing is merged on the sheet
+    yet, but the second op in the batch overlaps the first.
+    """
+    from openpyxl import load_workbook
+
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    wb = create_xlsx.build({"sheets": [{"name": "S", "rows": [["header"], ["important"]]}]})
+    wb["S"]["B2"] = "important data"
+    wb.save(str(src))
+
+    out = tmp_path / "out.xlsx"
+    report = _run_cli(
+        edit_xlsx,
+        monkeypatch,
+        capsys,
+        src,
+        out,
+        [
+            {"op": "merge_cells", "sheet": "S", "range": "A1:B2"},
+            {"op": "merge_cells", "sheet": "S", "range": "B2:C3"},
+        ],
+        tmp_path,
+    )
+
+    assert report == {"applied": 1}
+    reloaded = load_workbook(str(out))["S"]
+    assert [str(r) for r in reloaded.merged_cells.ranges] == ["A1:B2"]
+
+
+def test_merge_cells_invalid_range_string_still_raises(tmp_path: Path) -> None:
+    """Unchanged behaviour: a syntactically invalid range still raises.
+
+    The overlap guard is built on top of the existing (declined-to-change,
+    #1993) crash-on-malformed-range behaviour, not a replacement for it.
+    """
+    create_xlsx, edit_xlsx, _ = _import_scripts()
+    src = tmp_path / "book.xlsx"
+    wb = create_xlsx.build({"sheets": [{"name": "S", "rows": [["a"]]}]})
+    wb.save(str(src))
+
+    from openpyxl import load_workbook
+
+    reloaded = load_workbook(str(src))
+    with pytest.raises(ValueError, match="not a valid coordinate or range"):
+        edit_xlsx.apply_ops(reloaded, [{"op": "merge_cells", "sheet": "S", "range": "not-a-range"}])
+
+
 def test_without_as_text_a_formula_string_stays_a_formula(tmp_path: Path) -> None:
     """The default path is unchanged: openpyxl still records a formula cell."""
     sheet = _edit_and_reload(tmp_path, [_set_cell(2, "=SUM(A1:A1)")])

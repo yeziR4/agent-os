@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Fixed
+- `xlsx` skill script `edit_xlsx.py`: a `merge_cells` op whose range overlapped
+  a merge already on the sheet (pre-existing, or added earlier in the same op
+  list) was applied and counted in `applied` anyway. openpyxl does not refuse
+  an overlapping merge itself -- it adds the new merged range and blanks every
+  non-top-left cell it covers, including cells that belong to an existing
+  merge, silently discarding their data and leaving two overlapping merged
+  ranges in a workbook Excel treats as corrupt. Such an op is now skipped and
+  left out of `applied`.
 - Gateway/Sessions: `sessions_history` and spawned-subagent result reporting
   (`_read_child_result`) read a session's transcript through
   `SessionStorage.get_transcript`'s `limit`, which windows from the

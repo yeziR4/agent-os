@@ -15,6 +15,16 @@ Operations:
 * A **missing** ``value`` key is a malformed operation: it is skipped and not
   counted in ``applied``, so a typo cannot silently wipe data.
 * ``0``, ``false`` and ``""`` are values, not absence, and are written as given.
+
+`merge_cells` skips a range that overlaps a merge already on the sheet --
+whether that merge was already there or was added earlier in this same op
+list -- and does not count it in ``applied``. openpyxl does not reject an
+overlapping merge itself: it adds both ranges to the sheet and blanks every
+non-top-left cell each one covers, so the second merge silently discards
+whatever value sat in the cells it shares with the first, and the workbook
+ends up with two merged ranges that share cells, which Excel treats as
+corrupt. Refusing the op is what keeps ``applied`` a count of edits that
+actually landed cleanly.
 """
 
 from __future__ import annotations
@@ -27,6 +37,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.worksheet.cell_range import CellRange
 
 # Distinguishes {"value": null} from an op with no "value" key at all.
 # ``op.get("value")`` collapses both to None, which would make a malformed
@@ -136,7 +147,18 @@ def apply_ops(wb: Any, ops: list[dict[str, Any]]) -> int:
             sheet_name = op.get("sheet")
             rng = op.get("range")
             if sheet_name in wb.sheetnames and isinstance(rng, str):
-                wb[sheet_name].merge_cells(rng)
+                ws = wb[sheet_name]
+                # A syntactically invalid range (e.g. "not-a-range") still
+                # raises out of CellRange exactly as it did out of
+                # merge_cells() before this check existed -- that failure
+                # mode is unchanged. What's new is the overlap check: two
+                # merged ranges that share a cell are invalid OOXML and
+                # openpyxl does not refuse them, so without this a bad op
+                # would corrupt the sheet and still count as applied.
+                candidate = CellRange(rng)
+                if any(not candidate.isdisjoint(existing) for existing in ws.merged_cells.ranges):
+                    continue
+                ws.merge_cells(rng)
                 applied += 1
     return applied
 

@@ -123,6 +123,13 @@ Rules:
 - Datetimes go in as ISO 8601 strings (`"2026-05-06T09:00:00"`); the helper
   parses them back to `datetime` objects so Excel renders the cell with date
   format. Pass `as_text: true` to keep such a string as text instead.
+- A `merge_cells` range that overlaps a merge already on the sheet — one that
+  was already there, or one an earlier op in the same list just added — is
+  skipped and not counted in `applied`. Two merged ranges that share a cell
+  are invalid in the file format, and openpyxl does not refuse them itself:
+  it silently blanks whatever value sat in the shared cells and writes a
+  workbook Excel treats as corrupt. Unmerge the first range before merging
+  its cells into a new one.
 - Editing a cell does not recalculate dependent formulas. Excel and
   LibreOffice recalculate on open. If you need cached values immediately,
   use a calculation engine (out of scope here).
