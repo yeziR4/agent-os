@@ -5,6 +5,7 @@ import pytest
 from agentos.session.compaction import (
     CompactionConfig,
     CompactionRequest,
+    _find_turn_boundary_cut,
     call_compaction_llm,
     compact_context,
     estimate_entry_replay_tokens,
@@ -58,6 +59,37 @@ def test_compaction_effect_payload_marks_durable_completion_applied():
     assert payload["applied"] is True
     assert payload["durability"] == "durable"
     assert payload["user_visible"] is True
+
+
+def test_find_turn_boundary_cut_keeps_parallel_tool_results_together():
+    """A cut must never leave a sibling tool result as the first kept entry.
+
+    With parallel tool calls, the legacy budget cut can land between two tool
+    results belonging to the same assistant turn. The last-removed entry is
+    then itself a tool result (not the assistant message), so a check that
+    only looks for "assistant tool call removed" misses this case entirely
+    and keeps a lone `role: tool` entry with no preceding tool-call message —
+    invalid history that upstream providers reject with a 400.
+    """
+    entries = [
+        {"role": "user", "content": "analyze files"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "function": {"name": "read_file"}},
+                {"id": "call_2", "function": {"name": "read_file"}},
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "file 1 data " * 50},
+        {"role": "tool", "tool_call_id": "call_2", "content": "file 2 data"},
+        {"role": "assistant", "content": "Analysis complete."},
+    ]
+
+    cut = _find_turn_boundary_cut(entries, keep_budget=30)
+
+    first_kept = entries[cut] if cut < len(entries) else None
+    assert first_kept is None or first_kept.get("role") != "tool"
 
 
 @pytest.mark.asyncio

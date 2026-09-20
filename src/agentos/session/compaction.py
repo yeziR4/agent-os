@@ -586,10 +586,11 @@ def _find_turn_boundary_cut(
         last_removed = entries[cut - 1]
         first_kept = entries[cut] if cut < len(entries) else None
 
-        # Mid-turn: assistant tool call removed, tool result would be first kept.
-        if _is_assistant_tool_call_entry(last_removed) and _is_tool_result_entry(
-            first_kept
-        ):
+        # Mid-turn: a kept slice can never start with an orphaned tool result
+        # (this also covers parallel tool calls, where a sibling result — not
+        # the assistant message — can end up immediately before the cut), and
+        # a removed assistant tool call can never be the last removed entry.
+        if _is_tool_result_entry(first_kept) or _is_assistant_tool_call_entry(last_removed):
             # Move cut one step earlier to avoid splitting the pair.
             cut -= 1
             continue
