@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Skills (`history-explorer`): `explore.py --include` matched each
+  comma-separated token verbatim, so `"co_occurrences, router_fixtures"` —
+  written with the space people normally put after a comma — left the
+  second token as `" router_fixtures"`, which matched neither known
+  section. That section silently vanished from the JSON with no error;
+  the response still looked like a complete, successful answer with one
+  section quietly missing. Tokens are now stripped before matching.
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed

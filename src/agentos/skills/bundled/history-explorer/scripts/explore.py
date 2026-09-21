@@ -130,7 +130,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     log_dir = _resolve_log_dir(args.log_dir)
-    include = set(args.include.split(","))
+    # Each item is stripped before matching: the entrypoint template accepts
+    # --include as either a caller-built list (joined with a bare ",") or a
+    # free-form string an LLM types by hand, and "co_occurrences,
+    # router_fixtures" -- a comma followed by a space, the way people
+    # normally write a list -- is the far more natural spelling. Matching the
+    # raw split left " router_fixtures" (with its leading space) equal to
+    # neither known key, so that section vanished from the JSON with no
+    # error at all: a caller who asked for both sections back got one, and
+    # the response still looked like a complete, successful answer.
+    include = {token.strip() for token in args.include.split(",") if token.strip()}
     result: dict = {"query": args.query}
 
     if "co_occurrences" in include:

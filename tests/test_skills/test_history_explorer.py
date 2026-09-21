@@ -112,6 +112,33 @@ def test_router_fixtures_surfaces_fixture_files(tmp_path: Path) -> None:
     assert isinstance(out["router_fixtures"], list)
 
 
+def test_include_tolerates_spaces_after_commas(tmp_path: Path) -> None:
+    """--include "a, b" (a comma followed by a space) must not drop "b".
+
+    The SKILL.md entrypoint accepts --include as a free-form string when the
+    caller does not build it from a sequence, and "co_occurrences,
+    router_fixtures" -- spelled with the space people normally put after a
+    comma -- is the natural way to write it by hand. Matching the raw
+    ",".split() output left the second item as " router_fixtures" (leading
+    space), which equalled neither known key, so that whole section silently
+    disappeared from the JSON with no error and no trace of the request
+    ever having named it.
+    """
+    tight = _run_explore(tmp_path, "anything", include="co_occurrences,router_fixtures")
+    spaced = _run_explore(tmp_path, "anything", include="co_occurrences, router_fixtures")
+    assert "router_fixtures" in tight
+    assert "router_fixtures" in spaced, (
+        f"--include with a space after the comma dropped router_fixtures: {spaced}"
+    )
+    assert spaced["router_fixtures"] == tight["router_fixtures"]
+
+    # A single requested section with surrounding whitespace still resolves,
+    # and an unrequested one still stays out.
+    only_co = _run_explore(tmp_path, "anything", include=" co_occurrences ")
+    assert "co_occurrences" in only_co
+    assert "router_fixtures" not in only_co
+
+
 def test_resolve_log_dir_respects_env_overrides(tmp_path: Path, monkeypatch) -> None:
     """N18 regression: log_dir resolution honors $AGENTOS_LOG_DIR,
     $AGENTOS_STATE_DIR/logs, ~/.agentos/logs in that order;
