@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+import string
 
 # GFM's delimiter cell is *one or more* hyphens with an optional leading
 # and/or trailing colon, so `-`, `--`, `:-`, `-:` and `:-:` are all valid.
@@ -40,6 +41,13 @@ _BARE_URL_RE = re.compile(r"(https?://(?:[^\s()<]|\([^\s()<]*\))+)")
 # one space before the content. `>quote` (no space) and `>` alone (an empty
 # quote line, used to separate paragraphs within one quote) both match.
 _BLOCKQUOTE_RE = re.compile(r"^ {0,3}>[ ]?(?P<text>.*)$")
+# CommonMark: a backslash before any of these 32 ASCII punctuation characters
+# escapes it -- the pair is consumed and the character is emitted literally,
+# taking no further part in Markdown interpretation. `string.punctuation` is
+# exactly that set. A backslash before anything else (a letter, a digit, a
+# space, non-ASCII text) is not an escape: it stays in the output as an
+# ordinary backslash.
+_ESCAPABLE_PUNCTUATION = frozenset(string.punctuation)
 
 
 def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
@@ -68,14 +76,34 @@ def _find_closing_backtick_run(text: str, start: int, length: int) -> int:
     return -1
 
 
-def _replace_code_spans(text: str) -> tuple[str, list[str]]:
-    """Replace balanced Markdown code spans with private placeholders."""
+def _replace_code_spans(text: str) -> tuple[str, list[str], list[str]]:
+    """Replace balanced Markdown code spans and backslash escapes with
+    private placeholders.
+
+    The two are folded into one left-to-right scan rather than two
+    independent passes, because whether a backtick is even eligible to open a
+    code span depends on escaping: `` \\` `` is consumed right here as one
+    literal backtick and never reaches the run-counting below, so it can
+    neither open nor close a span (Issue #3305). A backtick that *does* open
+    a span is a different story -- CommonMark's own rule is that backslash
+    escapes do not work inside code spans, so once a span is open, the
+    closing search (`_find_closing_backtick_run`) is deliberately left alone:
+    it already matches on backtick runs alone, blind to any backslash in the
+    content, which is exactly the "escapes are inert here" behaviour wanted.
+    """
     chunks: list[str] = []
+    escapes: list[str] = []
     output: list[str] = []
     cursor = 0
     while cursor < len(text):
-        if text[cursor] != "`":
-            output.append(text[cursor])
+        char = text[cursor]
+        if char == "\\" and cursor + 1 < len(text) and text[cursor + 1] in _ESCAPABLE_PUNCTUATION:
+            escapes.append(text[cursor + 1])
+            output.append(f"\x00TG_ESC_{len(escapes) - 1}\x00")
+            cursor += 2
+            continue
+        if char != "`":
+            output.append(char)
             cursor += 1
             continue
         marker_end = cursor
@@ -97,7 +125,7 @@ def _replace_code_spans(text: str) -> tuple[str, list[str]]:
         chunks.append(f"<code>{html.escape(content)}</code>")
         output.append(placeholder)
         cursor = closing + len(marker)
-    return "".join(output), chunks
+    return "".join(output), chunks, escapes
 
 
 #: Builtins whose ``dir()`` enumerates the dunder protocol. Deriving the set
@@ -188,7 +216,7 @@ def _bold_underscore_strip(match: re.Match[str]) -> str:
 
 
 def _render_inline(text: str) -> str:
-    protected, code_chunks = _replace_code_spans(text)
+    protected, code_chunks, escapes = _replace_code_spans(text)
     rendered = html.escape(protected)
     hrefs: list[str] = []
     bare_urls: list[str] = []
@@ -242,7 +270,38 @@ def _render_inline(text: str) -> str:
         rendered = rendered.replace(f"\x00TG_HREF_{index}\x00", href)
     for index, chunk in enumerate(code_chunks):
         rendered = rendered.replace(f"\x00TG_CODE_{index}\x00", chunk)
+    # Escaped characters were parked before `html.escape(protected)` ran, so
+    # they need it applied here individually -- an escaped `<` or `&` must
+    # still reach Telegram as a safe entity, not raw HTML.
+    for index, escaped_char in enumerate(escapes):
+        rendered = rendered.replace(f"\x00TG_ESC_{index}\x00", html.escape(escaped_char))
     return rendered
+
+
+def _park_backslash_escapes(text: str) -> tuple[str, list[str]]:
+    """Replace each backslash-escaped ASCII punctuation character with a
+    private placeholder holding the literal character.
+
+    Companion to the escape handling folded into `_replace_code_spans`, for
+    callers -- `_plain_inline` -- that have no code spans of their own to
+    interleave it with. Parking rather than substituting the bare character
+    directly matters here too: a stripped `\\_` sitting next to a real `_`
+    must not suddenly look like one intraword delimiter to the marker passes
+    below (Issue #3305).
+    """
+    escapes: list[str] = []
+    output: list[str] = []
+    cursor = 0
+    while cursor < len(text):
+        char = text[cursor]
+        if char == "\\" and cursor + 1 < len(text) and text[cursor + 1] in _ESCAPABLE_PUNCTUATION:
+            escapes.append(text[cursor + 1])
+            output.append(f"\x00TG_ESC_{len(escapes) - 1}\x00")
+            cursor += 2
+            continue
+        output.append(char)
+        cursor += 1
+    return "".join(output), escapes
 
 
 def _plain_inline(text: str) -> str:
@@ -258,6 +317,10 @@ def _plain_inline(text: str) -> str:
         return f"{match.group(1)} (\x00TG_HREF_{len(hrefs) - 1}\x00)"
 
     text = _LINK_RE.sub(_park_href, text)
+    # Backslash escapes are parked before the marker passes below run, for the
+    # same reason as in `_render_inline`: an escaped `*`, `_` or `` ` `` must
+    # not still trigger the very formatting it was meant to suppress.
+    text, escapes = _park_backslash_escapes(text)
     text = text.replace("`", "")
     # `__` goes through the regex rather than `str.replace`: a blanket strip ate
     # the delimiters of `__init__` and handed the reader `init`, with not even a
@@ -272,6 +335,8 @@ def _plain_inline(text: str) -> str:
     text = _ITALIC_UNDERSCORE_RE.sub(r"\1", text)
     for index, href in enumerate(hrefs):
         text = text.replace(f"\x00TG_HREF_{index}\x00", href)
+    for index, escaped_char in enumerate(escapes):
+        text = text.replace(f"\x00TG_ESC_{index}\x00", escaped_char)
     return text.strip()
 
 
