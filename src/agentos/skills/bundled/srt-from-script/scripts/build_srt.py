@@ -30,6 +30,9 @@ _SHOT_RE = re.compile(
 # only ``\d+`` truncated that to ``3`` and every later cue drifted early.
 _DUR_RE = re.compile(r"^\s*DURATION_S\s*:\s*(\d+(?:\.\d+)?)", re.MULTILINE)
 _VO_RE = re.compile(r"^\s*VOICEOVER\s*:\s*(.+?)\s*$", re.MULTILINE)
+# A line that looks like another ``FIELD: value`` entry (CAMERA,
+# IMAGE_PROMPT, ON_SCREEN_TEXT, ...) rather than continuation text.
+_FIELD_LINE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*\s*:")
 
 
 def parse_script(text: str) -> list[tuple[int, float, str]]:
@@ -48,7 +51,26 @@ def parse_script(text: str) -> list[tuple[int, float, str]]:
         if not dur_m:
             raise ValueError(f"SHOT_{shot_no} has no DURATION_S field")
         duration = float(dur_m.group(1))
-        voiceover = (vo_m.group(1) if vo_m else "").strip()
+        if vo_m:
+            # ``VOICEOVER`` is documented as a single line (ai-video-script
+            # OUTPUT FORMAT rule 4). ``_VO_RE`` only ever captures the first
+            # physical line, so a value that wraps onto a second line used
+            # to be silently truncated there — the reader got a chopped-off
+            # sentence and the script still exited 0. A non-blank line right
+            # after the match that isn't itself a ``FIELD: value`` line is
+            # that continuation text; treat it as the format drift the
+            # SKILL.md contract says is fatal, not something to guess at.
+            remainder = block[vo_m.end() :]
+            next_line_m = re.match(r"\n[ \t]*(\S[^\n]*)", remainder)
+            if next_line_m and not _FIELD_LINE_RE.match(next_line_m.group(1)):
+                raise ValueError(
+                    f"SHOT_{shot_no} has a multi-line VOICEOVER value "
+                    f"(unexpected continuation line: {next_line_m.group(1)!r}); "
+                    "VOICEOVER must be a single line"
+                )
+            voiceover = vo_m.group(1).strip()
+        else:
+            voiceover = ""
         if voiceover.lower() in {"", "none", "-", "--"}:
             voiceover = ""
         out.append((shot_no, duration, voiceover))

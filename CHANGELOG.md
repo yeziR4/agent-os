@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Skills (`srt-from-script`): a `VOICEOVER` value that wraps onto a second
+  physical line — something `ai-video-script`'s LLM output does routinely for
+  a long quoted sentence, even though the OUTPUT FORMAT documents `VOICEOVER`
+  as a single line — is now rejected instead of silently truncated.
+  `_VO_RE` only ever captured the first physical line of the value, so the
+  continuation text was dropped with no warning: the reader got a chopped-off
+  sentence and `build_srt.py` still exited 0 with a well-formed-looking SRT.
+  `parse_script` now detects a non-blank continuation line following
+  `VOICEOVER` that isn't itself a `FIELD: value` line and raises, consistent
+  with SKILL.md's own contract ("drift away from that format → zero cues,
+  exit 1") and the same treatment already given to a missing `DURATION_S`.
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
