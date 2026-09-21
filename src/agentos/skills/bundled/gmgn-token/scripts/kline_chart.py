@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -62,15 +63,29 @@ def _find_candles(payload: Any, depth: int = 0) -> list[dict[str, Any]]:
 
 
 def _number(value: Any) -> float | None:
+    """A usable finite number, or ``None``.
+
+    ``float()`` and ``json.loads`` both accept ``"NaN"``/``"Infinity"``/
+    ``"-Infinity"`` without error, so a candle field carrying one of those is
+    indistinguishable from a normal number to every check downstream of this
+    function. Left unfiltered, it survives into the written chart artifact as
+    a bare ``NaN``/``Infinity`` token — invalid JSON that a strict parser
+    (e.g. the Web chat's ``JSON.parse``) rejects outright, after this script
+    has already reported success. Treating it as unusable, the same as a
+    missing or non-numeric field, is what keeps a malformed row from being
+    reported as a good candle.
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     if isinstance(value, str) and value.strip():
         try:
-            return float(value)
+            number = float(value)
         except ValueError:
             return None
+        return number if math.isfinite(number) else None
     return None
 
 

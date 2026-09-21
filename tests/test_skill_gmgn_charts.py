@@ -10,6 +10,7 @@ timestamps and its USD-vs-token-units volume fields.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -103,6 +104,41 @@ def test_a_row_missing_any_ohlc_field_is_dropped_rather_than_zero_filled() -> No
     ]
 
     assert [candle["time"] for candle in module.convert_candles(rows)] == [200]
+
+
+def test_a_row_with_nan_or_infinity_is_dropped_not_written_as_a_bare_token() -> None:
+    module = load_converter()
+    rows = [
+        # A real GMGN response can carry NaN/Infinity for a computed OHLC
+        # field (e.g. a zero-liquidity candle). json.loads accepts the bare
+        # tokens without error, so this is indistinguishable from a normal
+        # number to every isinstance/type check downstream.
+        {"time": 100, "open": 1.0, "high": float("nan"), "low": 0.9, "close": 1.0},
+        {"time": 200, "open": 1.0, "high": 1.2, "low": 1.0, "close": float("inf")},
+        {"time": 300, "open": 1.0, "high": 1.2, "low": 1.0, "close": "-Infinity"},
+        {"time": 400, "open": "1", "high": "2", "low": "1", "close": "2"},
+    ]
+
+    candles = module.convert_candles(rows)
+
+    # Only the one finite, well-formed row survives.
+    assert [candle["time"] for candle in candles] == [400]
+    # Every surviving value round-trips through strict JSON (RFC 8259): no
+    # bare NaN/Infinity/-Infinity token, which json.dumps would otherwise
+    # write and which the Web chat's JSON.parse rejects outright.
+    encoded = json.dumps(candles)
+    reparsed = json.loads(encoded)
+    assert reparsed == candles
+
+
+def test_a_nonfinite_volume_is_dropped_rather_than_carried() -> None:
+    module = load_converter()
+    base = {"open": "1", "high": "2", "low": "1", "close": "2"}
+    rows = [{"time": 100, **base, "volume": "NaN"}]
+
+    candles = module.convert_candles(rows)
+
+    assert "volume" not in candles[0]
 
 
 def test_usd_volume_is_carried_and_a_negative_one_dropped() -> None:

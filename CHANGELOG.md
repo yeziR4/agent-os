@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- Skills (`gmgn-market`, `gmgn-token`): `kline_chart.py`'s `_number()` accepted
+  `NaN`/`Infinity`/`-Infinity` as ordinary floats. `json.loads` parses those
+  bare tokens without error, so a GMGN candle carrying one (e.g. a
+  zero-liquidity OHLC field) passed every finiteness-blind check and was
+  written straight into the chart artifact via `json.dumps`, which also
+  emits the tokens verbatim. The script reported success (`wrote N candles`,
+  exit 0), but the artifact was invalid JSON per RFC 8259 — the Web chat's
+  `JSON.parse` rejects a bare `NaN`/`Infinity` outright, so the candlestick
+  failed to render. `_number()` now requires `math.isfinite()`, so a
+  non-finite field is dropped the same way a missing one already was.
+
 ## [2026.9.22] - 2026-09-22
 
 ### Fixed
