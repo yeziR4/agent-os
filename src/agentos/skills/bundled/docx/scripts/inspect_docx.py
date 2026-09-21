@@ -14,6 +14,7 @@ from typing import Any
 
 from docx import Document
 from docx.opc.exceptions import PackageNotFoundError
+from docx.oxml.ns import qn
 from docx.table import Table, _Cell
 from lxml import etree
 
@@ -65,6 +66,28 @@ def _write_stdout(text: str) -> None:
     sys.stdout.flush()
 
 
+def _has_tracked_changes(doc: Document) -> bool:
+    """True only when the body holds a real ``<w:ins>`` or ``<w:del>`` element.
+
+    A substring search on the serialized body XML (the previous
+    implementation) also matches ``<w:instrText>`` -- the field-instruction
+    element behind ordinary PAGE/TOC/REF/hyperlink fields -- and
+    ``<w:insideH>``/``<w:insideV>`` -- the inside-border sides of a table's
+    ``<w:tblBorders>``/``<w:tcBorders>``. Both are far more common in an
+    everyday document than an actual tracked change, so any doc with a page
+    number field or a bordered table was reported as having tracked changes
+    it does not have (SKILL.md's "Tracked changes" section promises
+    ``has_tracked_changes: true`` only "when any w:ins or w:del element is
+    found"). Walking the element tree for the exact tag, instead of the
+    string that happens to prefix it, matches only what the contract
+    promises.
+    """
+    body = doc.element.body if doc.element is not None else None
+    if body is None:
+        return False
+    return body.find(f".//{qn('w:ins')}") is not None or body.find(f".//{qn('w:del')}") is not None
+
+
 def inspect(path: Path) -> dict[str, Any]:
     try:
         doc = Document(str(path))
@@ -89,8 +112,7 @@ def inspect(path: Path) -> dict[str, Any]:
     for tbl in doc.tables:
         tables.append([[_cell_text(_Cell(tc, tbl)) for tc in row] for row in _iter_table_rows(tbl)])
 
-    body_xml = doc.element.body.xml if doc.element is not None else ""
-    has_tracked_changes = "<w:ins" in body_xml or "<w:del" in body_xml
+    has_tracked_changes = _has_tracked_changes(doc)
 
     return {
         "paragraphs": paragraphs,
