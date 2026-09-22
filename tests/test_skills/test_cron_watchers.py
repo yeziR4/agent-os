@@ -187,6 +187,22 @@ def test_rss_prioritizes_atom_alternate_link_over_self(state_dir, base_url):
     assert "https://example.com/feed.atom" not in result.stdout
 
 
+def test_rss_reports_entries_that_share_a_synthesized_id(state_dir, base_url):
+    dup_link = """<?xml version="1.0"?><rss><channel>
+<item><title>Alpha</title><link>https://example.com/category</link></item>
+<item><title>Beta</title><link>https://example.com/category</link></item>
+</channel></rss>"""
+    url = _feed(state_dir, base_url, "dup.xml", dup_link)
+
+    result = _run(
+        "watch_rss.py", "--url", url, "--name", "d", "--first-run-reports", env_home=state_dir
+    )
+
+    assert result.returncode == 0
+    assert "Alpha" in result.stdout
+    assert "Beta" in result.stdout
+
+
 def test_rss_fails_loudly_on_a_broken_feed(state_dir, base_url):
     url = _feed(state_dir, base_url, "broken.xml", "not xml at all")
 

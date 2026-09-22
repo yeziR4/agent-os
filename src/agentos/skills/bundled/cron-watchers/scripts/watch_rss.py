@@ -107,7 +107,18 @@ def main() -> int:
         return 1
 
     entries = _entries(root)
-    by_id = {entry[0]: entry for entry in entries}
+    by_id: dict[str, tuple[str, str, str]] = {}
+    seen_counts: dict[str, int] = {}
+    for entry in entries:
+        base_id = entry[0]
+        occurrence = seen_counts.get(base_id, 0)
+        seen_counts[base_id] = occurrence + 1
+        # Two items with no guid/id can synthesize the same fallback id (e.g.
+        # both link to a shared category page). Disambiguate every entry past
+        # the first so a collision drops nothing -- position is stable across
+        # polls as long as the feed keeps a consistent item order.
+        key = base_id if occurrence == 0 else f"{base_id}#{occurrence + 1}"
+        by_id[key] = entry
     fresh = select_new(
         args.name, list(by_id), first_run_reports=args.first_run_reports, limit=args.limit
     )
