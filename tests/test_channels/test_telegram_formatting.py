@@ -187,7 +187,7 @@ async def test_telegram_send_falls_back_to_plain_text_on_entity_parse_error() ->
     }
 
 
-# ── Issue #1031: ragged table rows ──────────────────────────────────────
+# ── Issue #1031: ragged table rows ──────────────────────────────────
 
 
 def test_two_column_table_with_short_row_pads_missing_cell() -> None:
@@ -657,3 +657,72 @@ def test_a_triple_marker_run_beside_a_bold_run() -> None:
 
     assert rendered == "<b><i>a</i></b> and <b>b</b>"
     assert _entities_are_properly_nested(rendered)
+
+
+@pytest.mark.parametrize(
+    ("markdown", "expected"),
+    [
+        (r"literal \*not italic\* here", "literal *not italic* here"),
+        (r"a \_b\_ c", "a _b_ c"),
+        (r"\`not code\`", "`not code`"),
+        (r"\*\*not bold\*\*", "**not bold**"),
+        (r"\_\_not bold\_\_", "__not bold__"),
+        (r"\~\~not struck\~\~", "~~not struck~~"),
+    ],
+)
+def test_backslash_escaped_markdown_character_is_literal_and_unformatted(
+    markdown: str, expected: str
+) -> None:
+    """CommonMark: a backslash before ASCII punctuation makes it literal and
+    consumes the backslash, so the character neither reaches the reader nor
+    triggers the formatting it was meant to suppress (Issue #3305)."""
+    assert render_telegram_html(markdown) == expected
+
+
+def test_escaped_backtick_does_not_open_a_code_span() -> None:
+    """The worst case from #3305: an escaped backtick used to still open a
+    real <code> span, so the stray backslash ended up *inside* it."""
+    rendered = render_telegram_html(r"\`not code\`")
+
+    assert "<code>" not in rendered
+    assert rendered == "`not code`"
+
+
+def test_backslash_is_literal_inside_a_real_code_span() -> None:
+    """CommonMark: backslash escapes do not work inside code spans -- only an
+    *unescaped* backtick may open or close one, but once a span is open its
+    content (including any backslash) is passed through unprocessed."""
+    rendered = render_telegram_html(r"`\*foo\*`")
+
+    assert rendered == "<code>\\*foo\\*</code>"
+
+
+def test_escaped_backslash_yields_a_single_literal_backslash() -> None:
+    rendered = render_telegram_html(r"a\\b")
+
+    assert rendered == "a\\b"
+
+
+def test_backslash_before_a_non_punctuation_character_is_kept_literally() -> None:
+    """Only ASCII punctuation is escapable; a backslash before anything else
+    is not a CommonMark escape sequence and stays in the output as-is."""
+    rendered = render_telegram_html(r"no\where")
+
+    assert rendered == "no\\where"
+
+
+def test_escaped_angle_bracket_still_reaches_telegram_as_a_safe_entity() -> None:
+    """The escaped character is parked before `html.escape` runs over the
+    rest of the line, so it must be escaped individually on the way back out
+    -- an escaped `<` must never reach Telegram as raw, unescaped HTML."""
+    rendered = render_telegram_html(r"\<script\>")
+
+    assert rendered == "&lt;script&gt;"
+
+
+def test_plain_inline_also_honours_backslash_escapes() -> None:
+    """`_plain_inline` (used for table labels) strips markers with the same
+    regexes as `_render_inline` and has the identical escaped-delimiter
+    hazard (Issue #3305)."""
+    assert _plain_inline(r"a \_b\_ c") == "a _b_ c"
+    assert _plain_inline(r"\*\*not bold\*\*") == "**not bold**"
