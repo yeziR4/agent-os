@@ -669,6 +669,89 @@ def test_create_xlsx_cli_reports_non_object_json_with_exit_code_2(
     assert not out.exists()
 
 
+# ── a malformed "sheets" shape is reported, not silently dropped (#silent-empty-xlsx) ──
+#
+# `build()` filters out anything that is not a well-formed sheet object --
+# that permissiveness is deliberate and is exercised directly by
+# `test_build_returns_a_base_workbook_for_malformed_sheets` above, since other
+# callers use `build()` without going through the CLI's validation gate. The
+# CLI entrypoint is a different question: `{"sheets": [1, 2, 3]}` and
+# `{"sheets": "Sales"}` used to reach `build()` unchecked, which filtered every
+# entry away and silently wrote a valid-looking single-default-sheet workbook
+# at exit 0 -- indistinguishable from an intentional blank spec, and with the
+# caller's actual sheets discarded without a trace. `main()` now validates the
+# shape before calling `build()`, mirroring `check_body_entries` in the
+# sibling `create_docx.py` script.
+
+
+@pytest.mark.parametrize(
+    ("raw_sheets", "expected_message"),
+    [
+        pytest.param([1, 2, 3], "sheet entry 0 must be an object, got int", id="all-non-dict"),
+        pytest.param("Sales", '"sheets" must be an array, got str', id="not-a-list"),
+        pytest.param(
+            [{"name": "Good", "rows": [["a"]]}, "garbage"],
+            "sheet entry 1 must be an object, got str",
+            id="partially-malformed",
+        ),
+    ],
+)
+def test_create_xlsx_cli_rejects_a_malformed_sheets_shape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    raw_sheets: object,
+    expected_message: str,
+) -> None:
+    create_xlsx, _, _ = _import_scripts()
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(json.dumps({"sheets": raw_sheets}), encoding="utf-8")
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["create_xlsx.py", str(spec_path), "--out", str(out)])
+
+    assert create_xlsx.main() == 2
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert expected_message in captured.err
+    assert not out.exists()
+
+
+def test_create_xlsx_cli_a_missing_sheets_key_is_still_a_valid_blank_workbook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An omitted "sheets" key is a deliberate blank workbook, not malformed input."""
+    create_xlsx, _, _ = _import_scripts()
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text("{}", encoding="utf-8")
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["create_xlsx.py", str(spec_path), "--out", str(out)])
+
+    assert create_xlsx.main() == 0
+    assert out.is_file()
+
+
+def test_create_xlsx_cli_still_creates_a_valid_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    create_xlsx, _, inspect_xlsx = _import_scripts()
+
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps({"sheets": [{"name": "Sales", "rows": [["Region", "Revenue"], ["NA", 100]]}]}),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.xlsx"
+    monkeypatch.setattr(sys, "argv", ["create_xlsx.py", str(spec_path), "--out", str(out)])
+
+    assert create_xlsx.main() == 0
+    sheets = inspect_xlsx.inspect(out, data_only=False)["sheets"]
+    assert sheets[0]["name"] == "Sales"
+    assert sheets[0]["rows"][1][1]["value"] == 100
+
+
 # ── unusable ops files are reported, not swallowed (#2145, #2146) ────────────
 
 

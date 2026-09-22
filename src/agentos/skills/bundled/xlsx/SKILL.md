@@ -166,6 +166,11 @@ to merge metadata only; inspected `rows` contain cell objects rather than
 the plain values required by the creation spec. Invalid range coordinates
 raise an error from openpyxl.
 
+A `"sheets"` value that is not an array, or that contains an entry that is
+not an object (`{"sheets": [1, 2, 3]}`, `{"sheets": "Sales"}`), exits 2 with
+`error: …` and writes nothing. A missing `"sheets"` key is a deliberate blank
+workbook and is not an error.
+
 For programmatic use:
 
 ```python

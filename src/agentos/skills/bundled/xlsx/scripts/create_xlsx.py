@@ -27,6 +27,32 @@ from typing import Any
 from openpyxl import Workbook
 
 
+class SpecError(ValueError):
+    """A spec that cannot be used. Reported as ``error:`` / exit 2, never as a
+    traceback: the caller passed bad input, the script did not break."""
+
+
+def check_sheets_shape(spec: dict[str, Any]) -> None:
+    """Raise :class:`SpecError` for a "sheets" shape ``build`` would silently drop.
+
+    A "sheets" value that is not a list, or a list entry that is not an
+    object, used to fall through ``build``'s ``isinstance`` filters
+    unmentioned: ``{"sheets": [1, 2, 3]}`` and ``{"sheets": "Sales"}`` both
+    produced a valid, empty, single-default-sheet workbook reported as a
+    success, indistinguishable from an intentional blank spec. A missing
+    "sheets" key is left alone -- an omitted key is a deliberate blank
+    workbook, not a malformed one.
+    """
+    if "sheets" not in spec:
+        return
+    raw_sheets = spec["sheets"]
+    if not isinstance(raw_sheets, (list, tuple)):
+        raise SpecError(f'"sheets" must be an array, got {type(raw_sheets).__name__}')
+    for index, item in enumerate(raw_sheets):
+        if not isinstance(item, dict):
+            raise SpecError(f"sheet entry {index} must be an object, got {type(item).__name__}")
+
+
 def _coerce(value: Any) -> Any:
     if isinstance(value, str) and len(value) >= 19 and value[10] == "T":
         try:
@@ -105,6 +131,11 @@ def main() -> int:
         return 2
     if not isinstance(spec, dict):
         print("error: JSON spec must be an object", file=sys.stderr)
+        return 2
+    try:
+        check_sheets_shape(spec)
+    except SpecError as exc:
+        print(f"error: {exc}", file=sys.stderr)
         return 2
     wb = build(spec)
     args.out.parent.mkdir(parents=True, exist_ok=True)
