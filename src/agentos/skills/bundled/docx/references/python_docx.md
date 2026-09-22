@@ -86,11 +86,17 @@ prior section.
 ## Tracked changes
 
 python-docx does not expose `<w:ins>` / `<w:del>` as first-class objects.
-Detection is XML-level:
+Detection is XML-level — walk the element tree for the exact tag, not a
+substring of the serialized XML: `"<w:ins" in xml` also matches
+`<w:instrText>` (field codes: PAGE, TOC, REF, hyperlinks) and
+`<w:insideH>`/`<w:insideV>` (table border sides), both far more common than
+an actual tracked change.
 
 ```python
-xml = doc.element.body.xml
-has_tracked = "<w:ins" in xml or "<w:del" in xml
+from docx.oxml.ns import qn
+
+body = doc.element.body
+has_tracked = body.find(f".//{qn('w:ins')}") is not None or body.find(f".//{qn('w:del')}") is not None
 ```
 
 To accept or reject changes, walk the XML directly with `lxml` and either

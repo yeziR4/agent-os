@@ -194,6 +194,74 @@ def test_inspect_surfaces_nested_table_text(tmp_path: Path) -> None:
     assert "inner" in tables[0][0][0]
 
 
+def test_inspect_does_not_mistake_a_field_code_for_a_tracked_change(tmp_path: Path) -> None:
+    """``has_tracked_changes`` substring-matched the serialized body XML for
+    ``"<w:ins"`` / ``"<w:del"``, which also matches ``<w:instrText>`` -- the
+    field-instruction element behind an everyday PAGE/TOC/REF/hyperlink field
+    -- and ``<w:insideH>``/``<w:insideV>`` -- a table's inside-border sides.
+    Neither is a tracked change, and SKILL.md promises the flag only "when
+    any w:ins or w:del element is found."."""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    inspect_docx = _inspect_docx_module()
+    doc = Document()
+    paragraph = doc.add_paragraph()
+
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldType"), "begin")
+    paragraph.add_run()._r.append(begin)
+    instr = OxmlElement("w:instrText")
+    instr.text = "PAGE"
+    paragraph.add_run()._r.append(instr)
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldType"), "end")
+    paragraph.add_run()._r.append(end)
+
+    table = doc.add_table(rows=1, cols=1)
+    borders = OxmlElement("w:tblBorders")
+    for side in ("insideH", "insideV"):
+        edge = OxmlElement(f"w:{side}")
+        edge.set(qn("w:val"), "single")
+        borders.append(edge)
+    table._tbl.tblPr.append(borders)
+
+    src = tmp_path / "field.docx"
+    doc.save(str(src))
+
+    result = inspect_docx.inspect(src)
+
+    assert result["has_tracked_changes"] is False
+
+
+def test_inspect_reports_a_real_tracked_change(tmp_path: Path) -> None:
+    """The fix for the field-code false positive must not stop detecting an
+    actual ``<w:ins>``/``<w:del>`` tracked change."""
+    from docx import Document
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    inspect_docx = _inspect_docx_module()
+    doc = Document()
+    paragraph = doc.add_paragraph()
+    ins = OxmlElement("w:ins")
+    ins.set(qn("w:author"), "Reviewer")
+    run = OxmlElement("w:r")
+    text = OxmlElement("w:t")
+    text.text = "inserted"
+    run.append(text)
+    ins.append(run)
+    paragraph._p.append(ins)
+
+    src = tmp_path / "tracked.docx"
+    doc.save(str(src))
+
+    result = inspect_docx.inspect(src)
+
+    assert result["has_tracked_changes"] is True
+
+
 def test_inspect_rejects_non_docx_file(tmp_path: Path) -> None:
     """A corrupt file raised unhandled `PackageNotFoundError`; it must raise
     `ValueError` so the CLI can exit 2 with a clean message. (#2154)"""
